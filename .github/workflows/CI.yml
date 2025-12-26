@@ -1,0 +1,47 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HETZNER_SERVER_IP }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Stop script on first error
+            set -e
+
+            echo "📂 Navigating to app directory..."
+            cd /opt/life-io
+
+            echo "⬇️ Pulling latest changes..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "🏗️ Rebuilding and Restarting Containers..."
+            # --build forces a rebuild of the Dockerfile with new code
+            docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+
+            echo "⏳ Waiting for backend to initialize..."
+            sleep 10
+
+            echo "🔄 Running Database Migrations..."
+            # Execute migration script inside the running container
+            docker compose -f docker-compose.prod.yml exec -T life-io-backend bun run db:migrate
+
+            echo "🌱 Running Database Seed..."
+            # Execute seed script inside the running container
+            # Note: Ensure your seed script uses 'ON CONFLICT DO NOTHING/UPDATE' to be idempotent!
+            docker compose -f docker-compose.prod.yml exec -T life-io-backend bun run db:seed
+
+            echo "✅ Deployment Successfully Completed!"

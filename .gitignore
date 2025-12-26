@@ -1,0 +1,29 @@
+File: ./.gitignore
+------------------------
+node_modules
+a.txt
+.env
+.vite
+/nbproject/
+/.idea/*
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Build output
+dist/
+coverage/
+test-results/
+
+signing_key.jks
+
+# Cache files
+.eslintcache
+
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.backup
+infra/**/*.tfvars
+.terraform.lock.hcl

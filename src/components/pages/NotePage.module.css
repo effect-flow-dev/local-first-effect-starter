@@ -1,0 +1,78 @@
+/* FILE: ./src/components/pages/NotePage.module.css */
+@reference "tailwindcss";
+
+/* --- Layout, Header, and Input Styles --- */
+.container {
+  @apply mx-auto mt-2 max-w-4xl md:mt-6;
+}
+.editor {
+  @apply rounded-lg bg-white p-4 md:p-8;
+}
+.header {
+  @apply mb-4 flex items-center justify-between;
+}
+.header h2 {
+  @apply text-lg font-semibold text-zinc-800;
+}
+.status {
+  @apply h-5 w-36 text-right text-sm text-zinc-500;
+}
+.titleInput {
+  @apply mb-4 w-full bg-transparent text-3xl font-bold text-zinc-900 focus:outline-none md:text-4xl;
+}
+.contentInput {
+  @apply min-h-[60vh] w-full resize-none bg-transparent text-base text-zinc-700 focus:outline-none md:text-lg;
+}
+
+.errorText {
+  @apply p-8 text-center text-red-500;
+}
+
+/* --- Heading Styles --- */
+.editor h1 {
+  @apply text-2xl font-bold md:text-3xl;
+}
+.editor h2 {
+  @apply text-xl font-bold md:text-2xl;
+}
+.editor h3 {
+  @apply text-lg font-bold md:text-xl;
+}
+
+/* --- List Styling --- */
+.editor ul {
+  @apply m-0 list-none p-0;
+}
+.editor li {
+  @apply relative pl-6;
+}
+.editor li::before {
+  @apply absolute left-0;
+  content: "•";
+}
+.editor ul ul li::before {
+  content: "◦";
+}
+.editor ul ul ul li::before {
+  content: "▪";
+}
+.editor ul ul ul ul li::before {
+  content: "–";
+}
+
+/* --- Block Preview Styles --- */
+.blocksContainer {
+  @apply mt-8 border-t border-zinc-200 pt-6;
+}
+.blocksHeader {
+  @apply mb-2 text-xs font-semibold tracking-wider text-zinc-500 uppercase;
+}
+.blockItem {
+  @apply mt-2 ml-4 rounded-md bg-zinc-50 p-3 text-sm text-zinc-800;
+}
+.blockType {
+  @apply mr-2 text-xs font-semibold text-zinc-400 select-none;
+}
+.noBlocksText {
+  @apply text-sm text-zinc-400;
+}

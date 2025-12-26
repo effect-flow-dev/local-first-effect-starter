@@ -1,0 +1,17 @@
+{
+  "appId": "io.life.app",
+  "appName": "Life IO",
+  "webDir": "dist",
+  "server": {
+    "url": "http://localhost:42069",
+    "cleartext": true
+  },
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": false
+    },
+    "EdgeToEdge": {
+      "backgroundColor": "#ffffff"
+    }
+  }
+}

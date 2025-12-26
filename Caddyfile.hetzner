@@ -1,0 +1,22 @@
+{
+    # Global options
+    # On-Demand TLS allows Caddy to obtain a cert for a domain the first time it is accessed.
+    # To prevent abuse (someone pointing evil.com to your IP), we use an 'ask' endpoint.
+    on_demand_tls {
+        ask http://life-io-backend:42069/api/infra/caddy-ask
+    }
+}
+
+# 1. Handle Root Domain (Marketing / Login)
+life-io.xyz {
+    reverse_proxy life-io-backend:42069
+}
+
+# 2. Handle Wildcard Subdomains (Tenants)
+# Any subdomain ending in .life-io.xyz matches here.
+*.life-io.xyz {
+    tls {
+        on_demand
+    }
+    reverse_proxy life-io-backend:42069
+}

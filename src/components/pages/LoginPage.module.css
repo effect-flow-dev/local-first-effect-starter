@@ -1,0 +1,43 @@
+/* Make Tailwind’s utilities & theme variables available
+   without duplicating their CSS output */
+@reference "tailwindcss"; /* 👈 NEW — required in v4 for CSS-modules */
+
+.container {
+  @apply flex min-h-screen items-center justify-center bg-zinc-100;
+}
+
+.formWrapper {
+  @apply w-full max-w-md rounded-lg bg-white p-8 shadow-md;
+}
+
+.title {
+  @apply mb-6 text-center text-2xl font-bold;
+}
+
+.field {
+  @apply mb-4;
+}
+
+.label {
+  @apply block text-sm font-medium text-zinc-700;
+}
+
+.input {
+  @apply mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 shadow-sm focus:border-zinc-500 focus:ring-zinc-500 focus:outline-none sm:text-sm;
+}
+
+.errorText {
+  @apply mb-4 text-sm text-red-500;
+}
+
+.submitButton {
+  @apply inline-flex w-full items-center justify-center gap-2 rounded-md bg-zinc-800 px-4 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-zinc-700 focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:outline-none disabled:pointer-events-none disabled:bg-zinc-600;
+}
+
+.linkContainer {
+  @apply mt-4 text-center text-sm;
+}
+
+.link {
+  @apply font-medium text-zinc-600 hover:text-zinc-500;
+}

@@ -1,0 +1,44 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "0.0.0.0:4318"
+
+exporters:
+  # Exporter 1: Use the 'debug' exporter to log telemetry to the console.
+  debug:
+    verbosity: detailed
+
+  # Exporter 2 (Optional but Recommended): Forward telemetry to BetterStack.
+  otlphttp:
+    endpoint: "https://otlp.eu-central-1.betterstack.com:443"
+    headers:
+      # The collector will get this value from the environment.
+      Authorization: "Bearer ${LOGTAIL_SOURCE_TOKEN}"
+
+processors:
+  batch:
+
+extensions:
+  health_check:
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      # Send traces to both the console and BetterStack.
+      exporters: [debug, otlphttp] # Changed logging -> debug
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      # Send metrics to both the console and BetterStack.
+      exporters: [debug, otlphttp] # Changed logging -> debug
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      # Send logs to both the console and BetterStack.
+      exporters: [debug, otlphttp] # Changed logging -> debug

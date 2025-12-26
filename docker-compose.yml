@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17
+    command: -d 1
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "6543:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=main
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector-local
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4318:4318"
+      - "4317:4317"
+      - "13133:13133"
+      - "55679:55679"
+    # --- THIS IS THE FIX ---
+    # This line tells Docker Compose to load variables from the .env file
+    # into the environment of this specific container.
+    env_file:
+      - ./.env
+
+volumes:
+  db_data: {}
