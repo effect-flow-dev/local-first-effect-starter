@@ -6,10 +6,9 @@ import {
   BlockIdSchema,
   TiptapDocSchema,
   NotebookIdSchema,
+  LenientDateSchema, // ✅ Import reusable date schema
 } from "../../lib/shared/schemas";
 
-
-// ✅ NEW: Template Schema for pre-filling notes
 export const TemplateItemSchema = Schema.Struct({
   type: Schema.Union(
       Schema.Literal("tiptap_text"),
@@ -26,7 +25,9 @@ export const CreateNoteArgsSchema = Schema.Struct({
   title: Schema.String,
   initialBlockId: Schema.optional(Schema.String),
   notebookId: Schema.optional(NotebookIdSchema),
-  template: Schema.optional(Schema.Array(TemplateItemSchema))
+  template: Schema.optional(Schema.Array(TemplateItemSchema)),
+  // ✅ FIX: Capture client time for offline audit trail
+  deviceCreatedAt: Schema.optional(LenientDateSchema), 
 });
 
 export const UpdateNoteArgsSchema = Schema.Struct({
@@ -40,7 +41,6 @@ export const DeleteNoteArgsSchema = Schema.Struct({
   id: NoteIdSchema,
 });
 
-// ✅ NEW: Create Block Schema
 export const CreateBlockArgsSchema = Schema.Struct({
   noteId: NoteIdSchema,
   blockId: BlockIdSchema,
@@ -49,11 +49,13 @@ export const CreateBlockArgsSchema = Schema.Struct({
       Schema.Literal("form_checklist"),
       Schema.Literal("form_meter")
   ),
-  // Optional initial content/fields
   content: Schema.optional(Schema.String),
   fields: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+  // ✅ FIX: Capture client time
+  deviceCreatedAt: Schema.optional(LenientDateSchema),
 });
 
+// ... existing Update/Revert schemas ...
 export const UpdateTaskArgsSchema = Schema.Struct({
   blockId: BlockIdSchema,
   isComplete: Schema.Boolean,

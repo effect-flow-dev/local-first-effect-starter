@@ -12,6 +12,18 @@ import { runClientUnscoped } from "./lib/client/runtime";
 import { startMediaPrefetch } from "./lib/client/MediaCacheService";
 import { initPWA } from "./lib/client/stores/pwaStore";
 
+// --- 1. Persistent Storage Request (Critical for Offline Data) ---
+async function requestPersistence() {
+  if (navigator.storage && navigator.storage.persist) {
+    const isPersisted = await navigator.storage.persist();
+    console.info(`[Storage] Persistent storage granted: ${isPersisted}`);
+    if (!isPersisted) {
+        console.warn("[Storage] WARNING: Data may be evicted by OS under low disk space.");
+    }
+  }
+}
+void requestPersistence();
+
 // --- Tenant Hint Auto-Redirect (Web Only) ---
 const rootDomain = import.meta.env.VITE_ROOT_DOMAIN || "localhost";
 const currentHostname = window.location.hostname;
@@ -34,7 +46,6 @@ if (!Capacitor.isNativePlatform() && (currentHostname === rootDomain || currentH
 initPWA();
 
 // --- Service Worker Registration ---
-// ✅ FIX: Do NOT register SW on Native (Capacitor handles offline caching via fs/webview)
 if (!Capacitor.isNativePlatform()) {
   registerSW({
     immediate: true,

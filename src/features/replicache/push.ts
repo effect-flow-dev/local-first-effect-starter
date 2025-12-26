@@ -15,7 +15,7 @@ import {
   handleUpdateBlock,
   handleRevertBlock,
   handleRevertNote,
-  handleCreateBlock, // ✅ Added
+  handleCreateBlock,
   RevertBlockArgsSchema,
   RevertNoteArgsSchema,
   CreateNoteArgsSchema,
@@ -23,7 +23,7 @@ import {
   DeleteNoteArgsSchema,
   UpdateTaskArgsSchema,
   UpdateBlockArgsSchema,
-  CreateBlockArgsSchema, // ✅ Added
+  CreateBlockArgsSchema,
 } from "../note/note.mutations";
 import {
   handleCreateNotebook,
@@ -90,7 +90,7 @@ const MUTATION_PERMISSIONS: Record<string, Permission> = {
     deleteNote: PERMISSIONS.NOTE_DELETE,
     updateTask: PERMISSIONS.TASK_UPDATE,
     updateBlock: PERMISSIONS.BLOCK_EDIT,
-    createBlock: PERMISSIONS.BLOCK_EDIT, // ✅ Added
+    createBlock: PERMISSIONS.BLOCK_EDIT, 
     createNotebook: PERMISSIONS.NOTEBOOK_CREATE,
     deleteNotebook: PERMISSIONS.NOTEBOOK_DELETE,
     revertBlock: PERMISSIONS.BLOCK_EDIT,
@@ -162,7 +162,7 @@ export const handlePush = (
             const expectedID = lastMutationID + 1;
 
             if (mutationID < expectedID) {
-              continue;
+              continue; // Already processed
             }
             if (mutationID > expectedID) {
               console.warn(`Mutation ${mutationID} from future? Expected ${expectedID}. Skipping/Gap.`);
@@ -174,6 +174,7 @@ export const handlePush = (
             if (requiredPerm) {
                 if (!currentRole || !hasPermission(currentRole, requiredPerm)) {
                     console.warn(`[RBAC] User ${user.id} (${currentRole}) attempted ${name} without ${requiredPerm}. Denied.`);
+                    // Even if denied, we must acknowledge the mutation so client doesn't retry
                     await trx
                       .updateTable("replicache_client")
                       .set({ last_mutation_id: mutationID })
@@ -191,7 +192,9 @@ export const handlePush = (
                 continue;
             }
 
-            // Execute the Business Logic (Authorized)
+            // Execute the Business Logic
+            // We use Effect to wrap the logic, but we run it inside a try/catch block
+            // to implement the "Poison Pill" strategy.
             const effectToRun = Effect.gen(function* () {
               if (name === "createNote") {
                 const a = yield* Schema.decodeUnknown(CreateNoteArgsSchema)(args);
@@ -208,7 +211,7 @@ export const handlePush = (
               } else if (name === "updateBlock") {
                 const a = yield* Schema.decodeUnknown(UpdateBlockArgsSchema)(args);
                 yield* handleUpdateBlock(trx, a, user.id);
-              } else if (name === "createBlock") { // ✅ Added
+              } else if (name === "createBlock") { 
                 const a = yield* Schema.decodeUnknown(CreateBlockArgsSchema)(args);
                 yield* handleCreateBlock(trx, a, user.id);
               } else if (name === "createNotebook") {
@@ -226,116 +229,86 @@ export const handlePush = (
               }
             });
 
-            await Effect.runPromise(
-              (effectToRun as Effect.Effect<void, unknown>).pipe(
-                Effect.catchAll((err) =>
-                  Effect.gen(function* () {
-                    // Conflict Handling
-                    if (err instanceof VersionConflictError) {
-                        const conflictErr = err;
-
-                        yield* Effect.logWarning(
-                          `[Push] Mutation ${name} rejected due to Version Conflict. Injecting Alert...`,
-                          conflictErr,
-                        );
-
+            // ✅ POISON PILL FIX:
+            // We must NOT let a single mutation failure abort the entire push transaction.
+            try {
+                await Effect.runPromise(effectToRun);
+            } catch (err) {
+                // Handle Specific Logic Errors (e.g. Conflicts)
+                if (err instanceof VersionConflictError) {
+                    console.warn(`[Push] Version Conflict detected for ${name}. Injecting alert...`);
+                    
+                    // Run conflict resolution logic in a separate Effect to ensure safety
+                    const conflictResolution = Effect.gen(function*() {
                         const blockRow = yield* Effect.tryPromise({
-                          try: () =>
-                              trx
-                              .selectFrom("block")
+                          try: () => trx.selectFrom("block")
                               .select(["note_id", "fields"])
-                              .where("id", "=", conflictErr.blockId as BlockId)
+                              .where("id", "=", err.blockId as BlockId)
                               .executeTakeFirst(),
-                          catch: (cause) => new NoteDatabaseError({ cause }),
+                          catch: (e) => new NoteDatabaseError({ cause: e }),
                         });
 
-                        if (!blockRow || !blockRow.note_id) {
-                          yield* Effect.logWarning("[Push] Conflict block not found. Cannot inject alert.");
-                          return;
-                        }
+                        if (!blockRow || !blockRow.note_id) return;
 
                         const noteRow = yield* Effect.tryPromise({
-                          try: () =>
-                              trx
-                              .selectFrom("note")
+                          try: () => trx.selectFrom("note")
                               .select("content")
                               .where("id", "=", blockRow.note_id!)
                               .executeTakeFirst(),
-                          catch: (cause) => new NoteDatabaseError({ cause }),
+                          catch: (e) => new NoteDatabaseError({ cause: e }),
                         });
 
-                        if (!noteRow || !noteRow.content) {
-                          yield* Effect.logWarning("[Push] Note content not found. Cannot inject alert.");
-                          return;
-                        }
+                        if (!noteRow || !noteRow.content) return;
 
-                        let message = `⚠️ Sync Conflict: Server version (${conflictErr.expectedVersion}) is ahead of yours (${conflictErr.actualVersion}). Update rejected.`;
-
+                        // Construct message
+                        let message = `Sync Conflict: Server v${err.expectedVersion} vs Your v${err.actualVersion}`;
                         try {
-                          const serverFields = (blockRow.fields as Record<string, unknown>) || {};
-
-                          if (name === "updateTask") {
-                              const clientArgs = args as { isComplete: boolean };
-                              const clientStatus = clientArgs.isComplete ? "done" : "todo";
-                              const serverStatus = serverFields.is_complete ? "done" : "todo";
-                              message = `⚠️ Sync Conflict: You tried to set this to '${clientStatus}', but Server is '${serverStatus}'. Update rejected.`;
-                          } else if (name === "updateBlock") {
-                              const clientArgs = args as { fields: Record<string, unknown> };
-                              const clientFields = clientArgs.fields || {};
-                              const statusKey = "status";
-                              
-                              if (statusKey in clientFields && statusKey in serverFields) {
-                                const cStat = String(clientFields[statusKey]);
-                                const sStat = String(serverFields[statusKey]);
-                                message = `⚠️ Sync Conflict: You tried to set status to '${cStat}', but Server is '${sStat}'. Update rejected.`;
-                              }
-                          }
-                        } catch (e) {
-                            console.warn("Failed to construct detailed conflict error", e);
-                        }
+                            const serverFields = (blockRow.fields as Record<string, unknown>) || {};
+                            if (name === "updateTask") {
+                                 
+                                const clientArgs = args as { isComplete: boolean };
+                                const sStat = serverFields.is_complete ? "done" : "todo";
+                                const cStat = clientArgs.isComplete ? "done" : "todo";
+                                message = `Sync Conflict: Server is '${sStat}', you tried '${cStat}'. Rejected.`;
+                            }
+                        } catch (e) { console.warn("Msg gen failed", e); }
 
                         const content = JSON.parse(JSON.stringify(noteRow.content)) as GenericTiptapNode;
-                        
-                        const injected = injectConflictAlert(
-                          content,
-                          conflictErr.blockId,
-                          message,
-                        );
+                        if (injectConflictAlert(content, err.blockId, message)) {
+                             // ✅ FIX: Use Effect.tryPromise + sql.execute inside generator (No await!)
+                             const res = yield* Effect.tryPromise({
+                                 try: async () => {
+                                     const result = await sql<{ nextval: string }>`select nextval('global_version_seq')`.execute(trx);
+                                     return Number(result.rows[0]?.nextval);
+                                 },
+                                 catch: (e) => new NoteDatabaseError({ cause: e })
+                             });
+                             const newTick = res;
 
-                        if (injected) {
-                          const newTick = yield* Effect.tryPromise({
-                              try: async () => {
-                                  const res = await sql<{ nextval: string }>`select nextval('global_version_seq')`.execute(trx);
-                                  return Number(res.rows[0]?.nextval);
-                              },
-                              catch: (e) => new NoteDatabaseError({ cause: e })
-                          });
-
-                          yield* Effect.tryPromise({
-                              try: () =>
-                              trx
-                                  .updateTable("note")
-                                  .set({
-                                    content: content as unknown, 
+                             yield* Effect.tryPromise({
+                                try: () => trx.updateTable("note").set({
+                                    content: content as unknown,
                                     version: sql<number>`version + 1`,
                                     updated_at: sql<Date>`now()`,
-                                    global_version: String(newTick), 
-                                  })
-                                  .where("id", "=", blockRow.note_id!)
-                                  .execute(),
-                              catch: (cause) => new NoteDatabaseError({ cause }),
-                          });
-                          yield* Effect.logInfo(`[Push] Injected conflict alert into note ${blockRow.note_id}`);
+                                    global_version: String(newTick)
+                                }).where("id", "=", blockRow.note_id!).execute(),
+                                catch: (e) => new NoteDatabaseError({ cause: e })
+                             });
                         }
-                    } else {
-                        console.error(`[Push] Unhandled error during mutation ${name}:`, err);
-                        return yield* Effect.fail(err);
-                    }
-                  }),
-                ),
-              ),
-            );
+                    });
 
+                    // Attempt conflict resolution; if it fails, just log it.
+                    await Effect.runPromise(conflictResolution.pipe(
+                        Effect.catchAll(e => Effect.logError("Conflict resolution failed", e))
+                    ));
+
+                } else {
+                    // "Poison Pill" Case: Schema validation failed, or unknown bug.
+                    console.error(`[Push] Poison Pill caught! Mutation ${name} (ID: ${mutationID}) failed. Consuming error to unblock queue.`, err);
+                }
+            }
+
+            // Always Advance the Pointer to acknowledge processing
             await trx
               .updateTable("replicache_client")
               .set({ last_mutation_id: mutationID })
@@ -344,7 +317,8 @@ export const handlePush = (
           }
         }),
       catch: (cause) => {
-        console.error("[Push] Transaction Failed:", cause);
+        // Only catch transient infra errors here.
+        console.error("[Push] Transaction Failed (Transient):", cause);
         return new PushError({ cause });
       },
     });

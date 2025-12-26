@@ -26,6 +26,8 @@ export default interface NoteTable {
   global_version: ColumnType<string, string | undefined, string>;
 
   notebook_id: ColumnType<NotebookId | null, NotebookId | null, NotebookId | null>;
+
+  device_created_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 export type Note = Selectable<NoteTable>;
