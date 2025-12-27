@@ -15,17 +15,19 @@ import { navigate } from "../../lib/client/router";
 import { runClientUnscoped } from "../../lib/client/runtime";
 import { ReplicacheService } from "../../lib/client/replicache";
 import { authState } from "../../lib/client/stores/authStore";
-import { 
-  type NoteId, 
-  type NotebookId, 
+import {
+  type NoteId,
+  type NotebookId,
 } from "../../lib/shared/schemas";
 import styles from "./Sidebar.module.css";
 // I18n
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { generateUniqueTitle } from "../../lib/client/logic/title-utils";
 import "../features/create-notebook-dialog";
-// ✅ FIX: Import PWA store
+// PWA
 import { installPromptState, promptInstall } from "../../lib/client/stores/pwaStore";
+// Geolocation
+import { getCurrentPosition } from "../../lib/client/geolocation";
 
 @customElement("side-bar")
 export class Sidebar extends LitElement {
@@ -34,7 +36,6 @@ export class Sidebar extends LitElement {
 
   @state() private _selectedNotebookId: string | null = null;
   @state() private _isCreateNotebookOpen = false;
-  // ✅ FIX: Add local state for install button visibility
   @state() private _canInstall = false;
 
   override connectedCallback() {
@@ -49,9 +50,8 @@ export class Sidebar extends LitElement {
       void notebookListState.value;
       void tabsState.value;
       void localeState.value;
-      // ✅ FIX: Subscribe to PWA prompt availability
       const prompt = installPromptState.value;
-      
+
       untracked(() => {
         this._canInstall = !!prompt;
         this.requestUpdate();
@@ -81,9 +81,12 @@ export class Sidebar extends LitElement {
       const user = authState.value.user;
       if (!user) return;
 
+      // ✅ FIX: Capture Geolocation
+      const location = yield* getCurrentPosition();
+
       const newNoteId = uuidv4() as NoteId;
       const initialBlockId = uuidv4();
-      
+
       const existingNotes = noteListState.value;
       const existingTitles = new Set(existingNotes.map((n) => n.title));
       const baseTitle = t("common.untitled_note");
@@ -96,6 +99,9 @@ export class Sidebar extends LitElement {
           title: uniqueTitle,
           initialBlockId,
           notebookId: (self._selectedNotebookId as NotebookId) || undefined,
+          // ✅ FIX: Pass coords to mutation args
+          latitude: location?.latitude,
+          longitude: location?.longitude,
         }),
       );
       yield* navigate(`/notes/${newNoteId}`);
@@ -115,14 +121,14 @@ export class Sidebar extends LitElement {
       if (!user) return;
 
       const newId = uuidv4() as NotebookId;
-      yield* Effect.tryPromise(() => 
+      yield* Effect.tryPromise(() =>
         replicache.client.mutate.createNotebook({
           id: newId,
           name,
           userID: user.id,
         })
       );
-      
+
       self._selectedNotebookId = newId;
       self._isCreateNotebookOpen = false;
     });
@@ -139,7 +145,7 @@ export class Sidebar extends LitElement {
 
     runClientUnscoped(Effect.gen(function* () {
       const replicache = yield* ReplicacheService;
-      yield* Effect.tryPromise(() => 
+      yield* Effect.tryPromise(() =>
         replicache.client.mutate.deleteNotebook({ id: id as NotebookId })
       );
       if (self._selectedNotebookId === id) {
@@ -157,7 +163,6 @@ export class Sidebar extends LitElement {
     this._selectedNotebookId = id;
   };
 
-  // ✅ FIX: Handle Install Click
   private _handleInstallClick = (e: Event) => {
     e.preventDefault();
     void promptInstall();
@@ -189,9 +194,9 @@ export class Sidebar extends LitElement {
     return html`
       <div class=${classMap(classes)}>
         <div class=${styles.content}>
-          
-          <!-- ✅ INBOX SECTION -->
-          <div 
+
+          <!-- INBOX SECTION -->
+          <div
             class="px-4 py-2 mb-2 cursor-pointer flex items-center gap-2 hover:bg-zinc-100 ${this._selectedNotebookId === null ? 'bg-zinc-100 text-zinc-900 font-semibold' : 'text-zinc-600'}"
             @click=${() => this._selectNotebook(null)}
           >
@@ -199,7 +204,7 @@ export class Sidebar extends LitElement {
             <span class="text-sm">Inbox</span>
           </div>
 
-          <!-- ✅ NOTEBOOKS SECTION -->
+          <!-- NOTEBOOKS SECTION -->
           <div class="mt-4">
             <div class="${styles.header} group">
               <span class=${styles.title}>Notebooks</span>
@@ -211,10 +216,10 @@ export class Sidebar extends LitElement {
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               </button>
             </div>
-            
+
             <div class="space-y-0.5">
               ${repeat(notebooks, (nb) => nb.id, (nb) => html`
-                <div 
+                <div
                   class="flex items-center justify-between px-4 py-1.5 cursor-pointer hover:bg-zinc-100 group ${this._selectedNotebookId === nb.id ? 'bg-zinc-100 text-zinc-900 font-medium' : 'text-zinc-600'}"
                   @click=${() => this._selectNotebook(nb.id)}
                 >
@@ -222,8 +227,8 @@ export class Sidebar extends LitElement {
                     <svg class="shrink-0 text-zinc-400" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
                     <span class="text-sm truncate">${nb.name}</span>
                   </div>
-                  
-                  <button 
+
+                  <button
                     class="opacity-0 group-hover:opacity-100 p-1 hover:bg-zinc-200 rounded text-zinc-400 hover:text-red-500"
                     @click=${(e: Event) => this._handleDeleteNotebook(e, nb.id)}
                   >
@@ -234,12 +239,12 @@ export class Sidebar extends LitElement {
             </div>
           </div>
 
-          <!-- ✅ NOTES LIST HEADER (Context Aware) -->
+          <!-- NOTES LIST HEADER -->
           <div class="mt-6 mb-1 px-4 flex items-center justify-between">
              <span class="text-xs font-semibold text-zinc-400 uppercase">
-               ${this._selectedNotebookId 
-                 ? notebooks.find(n => n.id === this._selectedNotebookId)?.name || "Notebook" 
-                 : "Inbox"}
+               ${this._selectedNotebookId
+                ? notebooks.find(n => n.id === this._selectedNotebookId)?.name || "Notebook"
+                : "Inbox"}
              </span>
              <button
               class=${styles.createButton}
@@ -250,47 +255,47 @@ export class Sidebar extends LitElement {
             </button>
           </div>
 
-          <!-- ✅ NOTES LIST -->
+          <!-- NOTES LIST -->
           <div>
             ${filteredNotes.length === 0
-              ? html`<div class="px-4 py-2 text-xs text-zinc-400 italic">
+                ? html`<div class="px-4 py-2 text-xs text-zinc-400 italic">
                   ${t("notes.empty_title")}
                 </div>`
-              : repeat(
-                  filteredNotes,
-                  (note) => note.id,
-                  (note) => {
-                    const isActive = this._currentPath === `/notes/${note.id}`;
-                    const isOpenInTab = openTabs.some((t) => t.id === note.id);
+                : repeat(
+                    filteredNotes,
+                    (note) => note.id,
+                    (note) => {
+                        const isActive = this._currentPath === `/notes/${note.id}`;
+                        const isOpenInTab = openTabs.some((t) => t.id === note.id);
 
-                    return html`
+                        return html`
                       <a
                         href="/notes/${note.id}"
                         class="${styles.link} ${isActive
-                          ? styles.activeLink
-                          : ""}"
+                                ? styles.activeLink
+                                : ""}"
                         @click=${(e: Event) =>
-                          this._handleNoteClick(e, note.id)}
+                                this._handleNoteClick(e, note.id)}
                       >
                         <div class="flex items-center justify-between">
                           <span class="truncate"
                             >${note.title || t("common.untitled_note")}</span
                           >
                           ${isOpenInTab
-                            ? html`<span
+                                ? html`<span
                                 class="ml-2 h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-400 opacity-60"
                                 title="Open in tabs"
                               ></span>`
-                            : nothing}
+                                : nothing}
                         </div>
                       </a>
                     `;
-                  },
+                    },
                 )}
           </div>
         </div>
 
-        <!-- ✅ FIX: Install App Button (Bottom of Sidebar) -->
+        <!-- INSTALL APP -->
         ${this._canInstall ? html`
           <div class="border-t border-zinc-200 p-4">
             <button

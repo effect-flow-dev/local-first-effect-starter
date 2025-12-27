@@ -6,7 +6,7 @@ import {
   BlockIdSchema,
   TiptapDocSchema,
   NotebookIdSchema,
-  LenientDateSchema, // ✅ Import reusable date schema
+  LenientDateSchema, 
 } from "../../lib/shared/schemas";
 
 export const TemplateItemSchema = Schema.Struct({
@@ -26,8 +26,10 @@ export const CreateNoteArgsSchema = Schema.Struct({
   initialBlockId: Schema.optional(Schema.String),
   notebookId: Schema.optional(NotebookIdSchema),
   template: Schema.optional(Schema.Array(TemplateItemSchema)),
-  // ✅ FIX: Capture client time for offline audit trail
   deviceCreatedAt: Schema.optional(LenientDateSchema), 
+  // ✅ NEW: Optional geo
+  latitude: Schema.optional(Schema.Number),
+  longitude: Schema.optional(Schema.Number),
 });
 
 export const UpdateNoteArgsSchema = Schema.Struct({
@@ -51,8 +53,10 @@ export const CreateBlockArgsSchema = Schema.Struct({
   ),
   content: Schema.optional(Schema.String),
   fields: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-  // ✅ FIX: Capture client time
   deviceCreatedAt: Schema.optional(LenientDateSchema),
+  // ✅ NEW: Optional geo
+  latitude: Schema.optional(Schema.Number),
+  longitude: Schema.optional(Schema.Number),
 });
 
 // ... existing Update/Revert schemas ...

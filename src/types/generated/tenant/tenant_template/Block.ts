@@ -44,6 +44,10 @@ export default interface BlockTable {
   global_version: ColumnType<string, string | undefined, string>;
 
   device_created_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+
+  latitude: ColumnType<number | null, number | null, number | null>;
+
+  longitude: ColumnType<number | null, number | null, number | null>;
 }
 
 export type Block = Selectable<BlockTable>;

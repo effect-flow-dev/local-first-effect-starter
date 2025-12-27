@@ -7,19 +7,21 @@ import { signal, effect } from "@preact/signals-core";
 import { runClientUnscoped } from "../../lib/client/runtime";
 import styles from "./NotePage.module.css";
 import {
-  type AppNote,
-  type TiptapDoc,
-  type BlockId,
-  type NotebookId,
-  type NoteId,
+    type AppNote,
+    type TiptapDoc,
+    type BlockId,
+    type NotebookId,
+    type NoteId,
 } from "../../lib/shared/schemas";
 import { authState, type AuthModel } from "../../lib/client/stores/authStore";
-import { notebookListState } from "../../lib/client/stores/notebookStore"; 
+import { notebookListState } from "../../lib/client/stores/notebookStore";
 import { updateTabTitle } from "../../lib/client/stores/tabStore";
 import { type NotePageError } from "../../lib/client/errors";
 import { NoteTitleExistsError } from "../../lib/shared/errors";
 import { ReplicacheService } from "../../lib/client/replicache";
 import { v4 as uuidv4 } from "uuid";
+// Geolocation
+import { getCurrentPosition } from "../../lib/client/geolocation";
 
 // --- Components ---
 import "../editor/tiptap-editor";
@@ -32,16 +34,16 @@ import "../features/history-sidebar";
 
 import { update, handleAction, type NotePageState, type Action } from "./note-page.logic";
 import {
-  handleTitleKeyDown,
-  handleTaskUpdate,
-  handleEditorClick,
-  handleLinkHover,
-  handleLinkHoverEnd,
-  initializeState,
-  handlePageHide,
-  handleInput,
-  handleEditorUpdate,
-  handleForceSave,
+    handleTitleKeyDown,
+    handleTaskUpdate,
+    handleEditorClick,
+    handleLinkHover,
+    handleLinkHoverEnd,
+    initializeState,
+    handlePageHide,
+    handleInput,
+    handleEditorUpdate,
+    handleForceSave,
 } from "./note-page.methods";
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { openHistory } from "../../lib/client/stores/historyStore";
@@ -49,272 +51,277 @@ import { clientLog } from "../../lib/client/clientLog";
 import type { ChecklistItem } from "../blocks/smart-checklist";
 
 interface ChecklistFields {
-  items: ChecklistItem[];
+    items: ChecklistItem[];
 }
 
 interface MeterFields {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  unit: string;
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    unit: string;
 }
 
 interface TiptapTextFields {
-  content: TiptapDoc;
+    content: TiptapDoc;
 }
 
 @customElement("note-page")
 export class NotePage extends LitElement {
-  @property({ type: String })
-  override id: string = "";
+    @property({ type: String })
+    override id: string = "";
 
-  public state = signal<NotePageState>({ status: "loading" });
+    public state = signal<NotePageState>({ status: "loading" });
 
-  private _isInitialized = false;
-  private _replicacheUnsubscribe: (() => void) | undefined;
-  private _authUnsubscribe: (() => void) | undefined;
-  private _disposeEffect?: () => void;
-  
-  public _saveFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
+    private _isInitialized = false;
+    private _replicacheUnsubscribe: (() => void) | undefined;
+    private _authUnsubscribe: (() => void) | undefined;
+    private _disposeEffect?: () => void;
 
-  private _handleTitleKeyDown = (e: KeyboardEvent) => handleTitleKeyDown(this, e);
+    public _saveFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
 
-  private _handleTaskUpdate = (e: Event) =>
-    handleTaskUpdate(
-      this,
-      e as CustomEvent<{ blockId: BlockId; isComplete: boolean }>,
-    );
+    private _handleTitleKeyDown = (e: KeyboardEvent) => handleTitleKeyDown(this, e);
 
-  private _handleEditorClick = (e: MouseEvent) => handleEditorClick(this, e);
-  
-  private _handlePageHide = () => handlePageHide(this);
-  
-  private _handleInput = (updateField: Partial<AppNote>) =>
-    handleInput(this, updateField);
+    private _handleTaskUpdate = (e: Event) =>
+        handleTaskUpdate(
+            this,
+            e as CustomEvent<{ blockId: BlockId; isComplete: boolean }>,
+        );
 
-  private _handleEditorUpdate = (e: Event) =>
-    handleEditorUpdate(
-      this,
-      e as CustomEvent<{ content: TiptapDoc }>,
-    );
-  
-  private _handleForceSave = (e: Event) => {
-    e.stopPropagation();
-    handleForceSave(this);
-  };
-  
-  private _handleLinkHover = (e: Event) =>
-    handleLinkHover(
-      this,
-      e as CustomEvent<{ target: string; x: number; y: number }>,
-    );
+    private _handleEditorClick = (e: MouseEvent) => handleEditorClick(this, e);
 
-  private _handleLinkHoverEnd = () => handleLinkHoverEnd(this);
+    private _handlePageHide = () => handlePageHide(this);
 
-  private _handleNotebookChange = (e: Event) => {
-    const select = e.target as HTMLSelectElement;
-    const value = select.value; 
-    const notebookId = value === "inbox" ? null : (value as NotebookId);
-    this._handleInput({ notebook_id: notebookId });
-  };
+    private _handleInput = (updateField: Partial<AppNote>) =>
+        handleInput(this, updateField);
 
-  private _handleOpenHistory = (e: Event) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (this.state.value.status === "ready") {
-        openHistory(this.state.value.note.id);
+    private _handleEditorUpdate = (e: Event) =>
+        handleEditorUpdate(
+            this,
+            e as CustomEvent<{ content: TiptapDoc }>,
+        );
+
+    private _handleForceSave = (e: Event) => {
+        e.stopPropagation();
+        handleForceSave(this);
+    };
+
+    private _handleLinkHover = (e: Event) =>
+        handleLinkHover(
+            this,
+            e as CustomEvent<{ target: string; x: number; y: number }>,
+        );
+
+    private _handleLinkHoverEnd = () => handleLinkHoverEnd(this);
+
+    private _handleNotebookChange = (e: Event) => {
+        const select = e.target as HTMLSelectElement;
+        const value = select.value;
+        const notebookId = value === "inbox" ? null : (value as NotebookId);
+        this._handleInput({ notebook_id: notebookId });
+    };
+
+    private _handleOpenHistory = (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.state.value.status === "ready") {
+            openHistory(this.state.value.note.id);
+        }
+    };
+
+    private _handleBlockUpdate = (e: Event) => {
+        e.stopPropagation();
+
+        const detail = (e as CustomEvent<{ blockId: BlockId; fields: Record<string, unknown> }>).detail;
+        const { blockId, fields } = detail;
+
+        const currentState = this.state.peek();
+        let currentVersion = 1;
+
+        if (currentState.status === "ready") {
+            const block = currentState.blocks.find(b => b.id === blockId);
+            if (block) {
+                currentVersion = block.version;
+            }
+        }
+
+        runClientUnscoped(Effect.gen(function* () {
+            const replicache = yield* ReplicacheService;
+            yield* Effect.promise(() =>
+                replicache.client.mutate.updateBlock({
+                    blockId,
+                    fields,
+                    version: currentVersion
+                })
+            );
+        }));
+    };
+
+    private _handleAddBlock = (type: "tiptap_text" | "form_checklist" | "form_meter") => {
+        const noteId = this.id as NoteId;
+        const blockId = uuidv4() as BlockId;
+
+        let initialFields = {};
+        if (type === "form_checklist") {
+            initialFields = { items: [{ id: uuidv4(), label: "New Item", checked: false }] };
+        } else if (type === "form_meter") {
+            initialFields = { label: "New Meter", value: 0, min: 0, max: 100, unit: "%" };
+        }
+
+        runClientUnscoped(Effect.gen(function* () {
+            // ✅ FIX: Capture Geolocation
+            const location = yield* getCurrentPosition();
+
+            yield* clientLog("info", `[NotePage] Adding block ${type} at`, location);
+            const replicache = yield* ReplicacheService;
+            yield* Effect.promise(() =>
+                replicache.client.mutate.createBlock({
+                    noteId,
+                    blockId,
+                    type,
+                    fields: initialFields,
+                    // ✅ FIX: Pass coords
+                    latitude: location?.latitude,
+                    longitude: location?.longitude,
+                })
+            );
+        }));
+    };
+
+    private _initializeState = () => initializeState(this);
+
+    public dispatch(action: Action) {
+        const currentState = this.state.peek();
+        const nextState = update(currentState, action);
+
+        this.state.value = nextState;
+        this.requestUpdate();
+
+        if (action.type === "DATA_UPDATED") {
+            updateTabTitle(action.payload.note.id, action.payload.note.title);
+        }
+        if (
+            action.type === "UPDATE_FIELD" &&
+            action.payload.title !== undefined &&
+            nextState.status === "ready"
+        ) {
+            updateTabTitle(nextState.note.id, action.payload.title);
+        }
+
+        const effect = handleAction(action, nextState).pipe(
+            Effect.catchTag("NoteTaskUpdateError", (err) =>
+                Effect.sync(() =>
+                    this.dispatch({ type: "UPDATE_TASK_ERROR", payload: err }),
+                ),
+            ),
+            Effect.catchTag("NoteCreationError", (err) =>
+                Effect.sync(() =>
+                    this.dispatch({ type: "INITIALIZE_ERROR", payload: err }),
+                ),
+            ),
+            Effect.catchTag("NoteDeletionError", (err) =>
+                Effect.sync(() =>
+                    this.dispatch({ type: "DELETE_ERROR", payload: err })
+                )
+            )
+        );
+
+        runClientUnscoped(effect);
     }
-  };
 
-  private _handleBlockUpdate = (e: Event) => {
-    e.stopPropagation();
-    
-    // ✅ FIX: Explicitly cast CustomEvent to strict type to avoid 'any' error on e.detail
-    const detail = (e as CustomEvent<{ blockId: BlockId; fields: Record<string, unknown> }>).detail;
-    const { blockId, fields } = detail;
-    
-    const currentState = this.state.peek();
-    let currentVersion = 1;
+    override connectedCallback() {
+        super.connectedCallback();
 
-    if (currentState.status === "ready") {
-        const block = currentState.blocks.find(b => b.id === blockId);
-        if (block) {
-            currentVersion = block.version;
+        const handleAuthChange = (auth: AuthModel) => {
+            if (auth.status === "authenticated" && !this._isInitialized) {
+                this._isInitialized = true;
+                this._initializeState();
+            } else if (auth.status !== "authenticated" && this._isInitialized) {
+                this._isInitialized = false;
+                this._replicacheUnsubscribe?.();
+                this.dispatch({ type: "INITIALIZE_START" });
+            }
+        };
+        this._authUnsubscribe = authState.subscribe(handleAuthChange);
+        handleAuthChange(authState.value);
+
+        this._disposeEffect = effect(() => {
+            void localeState.value;
+            void notebookListState.value;
+            void this.state.value;
+            this.requestUpdate();
+        });
+
+        window.addEventListener("pagehide", this._handlePageHide);
+    }
+
+    override updated(changedProperties: Map<string | number | symbol, unknown>) {
+        super.updated(changedProperties);
+        if (changedProperties.has("id") && this.id && this._isInitialized) {
+            this._initializeState();
         }
     }
 
-    runClientUnscoped(Effect.gen(function* () {
-        const replicache = yield* ReplicacheService;
-        yield* Effect.promise(() => 
-            replicache.client.mutate.updateBlock({
-                blockId,
-                fields,
-                version: currentVersion
-            })
-        );
-    }));
-  };
-
-  private _handleAddBlock = (type: "tiptap_text" | "form_checklist" | "form_meter") => {
-    const noteId = this.id as NoteId;
-    const blockId = uuidv4() as BlockId;
-
-    let initialFields = {};
-    if (type === "form_checklist") {
-        initialFields = { items: [{ id: uuidv4(), label: "New Item", checked: false }] };
-    } else if (type === "form_meter") {
-        initialFields = { label: "New Meter", value: 0, min: 0, max: 100, unit: "%" };
-    }
-
-    runClientUnscoped(Effect.gen(function* () {
-        yield* clientLog("info", `[NotePage] Adding block ${type}`);
-        const replicache = yield* ReplicacheService;
-        yield* Effect.promise(() => 
-            replicache.client.mutate.createBlock({
-                noteId,
-                blockId,
-                type,
-                fields: initialFields
-            })
-        );
-    }));
-  };
-
-  private _initializeState = () => initializeState(this);
-
-  public dispatch(action: Action) {
-    const currentState = this.state.peek();
-    const nextState = update(currentState, action);
-    
-    this.state.value = nextState;
-    this.requestUpdate();
-
-    if (action.type === "DATA_UPDATED") {
-      updateTabTitle(action.payload.note.id, action.payload.note.title);
-    }
-    if (
-      action.type === "UPDATE_FIELD" &&
-      action.payload.title !== undefined &&
-      nextState.status === "ready"
-    ) {
-      updateTabTitle(nextState.note.id, action.payload.title);
-    }
-
-    const effect = handleAction(action, nextState).pipe(
-      Effect.catchTag("NoteTaskUpdateError", (err) =>
-        Effect.sync(() =>
-          this.dispatch({ type: "UPDATE_TASK_ERROR", payload: err }),
-        ),
-      ),
-      Effect.catchTag("NoteCreationError", (err) =>
-        Effect.sync(() =>
-          this.dispatch({ type: "INITIALIZE_ERROR", payload: err }),
-        ),
-      ),
-      Effect.catchTag("NoteDeletionError", (err) => 
-        Effect.sync(() => 
-          this.dispatch({ type: "DELETE_ERROR", payload: err })
-        )
-      )
-    );
-
-    runClientUnscoped(effect);
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    
-    const handleAuthChange = (auth: AuthModel) => {
-      if (auth.status === "authenticated" && !this._isInitialized) {
-        this._isInitialized = true;
-        this._initializeState();
-      } else if (auth.status !== "authenticated" && this._isInitialized) {
-        this._isInitialized = false;
+    override disconnectedCallback() {
+        super.disconnectedCallback();
         this._replicacheUnsubscribe?.();
-        this.dispatch({ type: "INITIALIZE_START" });
-      }
-    };
-    this._authUnsubscribe = authState.subscribe(handleAuthChange);
-    handleAuthChange(authState.value);
-    
-    this._disposeEffect = effect(() => {
-      void localeState.value;
-      void notebookListState.value; 
-      void this.state.value; 
-      this.requestUpdate();
-    });
-
-    window.addEventListener("pagehide", this._handlePageHide);
-  }
-
-  override updated(changedProperties: Map<string | number | symbol, unknown>) {
-    super.updated(changedProperties);
-    if (changedProperties.has("id") && this.id && this._isInitialized) {
-      this._initializeState();
+        this._authUnsubscribe?.();
+        this._disposeEffect?.();
+        window.removeEventListener("pagehide", this._handlePageHide);
+        this._handlePageHide();
+        if (this._saveFiber) {
+            runClientUnscoped(Fiber.interrupt(this._saveFiber));
+        }
     }
-  }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this._replicacheUnsubscribe?.();
-    this._authUnsubscribe?.();
-    this._disposeEffect?.();
-    window.removeEventListener("pagehide", this._handlePageHide);
-    this._handlePageHide();
-    if (this._saveFiber) {
-      runClientUnscoped(Fiber.interrupt(this._saveFiber));
+    protected override createRenderRoot() {
+        return this;
     }
-  }
 
-  protected override createRenderRoot() {
-    return this;
-  }
+    override render() {
+        const s = this.state.value;
+        const notebooks = notebookListState.value;
 
-  override render() {
-    const s = this.state.value;
-    const notebooks = notebookListState.value;
+        const getErrorMessage = (e: NotePageError | NoteTitleExistsError | null) => {
+            if (!e) return null;
+            switch (e._tag) {
+                case "NoteNotFoundError": return t("note.not_found");
+                case "NoteParseError": return "Error loading note data.";
+                case "NoteSaveError": return "Failed to save changes.";
+                case "NoteTitleExistsError": return "A note with this title already exists.";
+                case "NoteTaskUpdateError": return "Failed to update task.";
+                case "NoteCreationError": return "Failed to create note.";
+                case "NoteDeletionError": return "Failed to delete note.";
+            }
+        };
 
-    const getErrorMessage = (e: NotePageError | NoteTitleExistsError | null) => {
-      if (!e) return null;
-      switch (e._tag) {
-        case "NoteNotFoundError": return t("note.not_found");
-        case "NoteParseError": return "Error loading note data.";
-        case "NoteSaveError": return "Failed to save changes.";
-        case "NoteTitleExistsError": return "A note with this title already exists.";
-        case "NoteTaskUpdateError": return "Failed to update task.";
-        case "NoteCreationError": return "Failed to create note.";
-        case "NoteDeletionError": return "Failed to delete note.";
-      }
-    };
+        switch (s.status) {
+            case "loading":
+                return html`<div class=${styles.container}><p>${t("note.loading")}</p></div>`;
 
-    switch (s.status) {
-      case "loading":
-        return html`<div class=${styles.container}><p>${t("note.loading")}</p></div>`;
-
-      case "error":
-        return html`<div class=${styles.container}>
+            case "error":
+                return html`<div class=${styles.container}>
           <p class=${styles.errorText}>
             ${getErrorMessage(s.error) || t("note.not_found")}
           </p>
         </div>`;
 
-      case "ready": {
-        const { note, blocks, isSaving, saveError, allNoteTitles, preview, deleteConfirmOpen } = s;
-        
-        const renderStatus = () => {
-          if (saveError) return html`<span class="text-red-500">${getErrorMessage(saveError)}</span>`;
-          if (isSaving) return t("note.saving");
-          return t("note.saved");
-        };
+            case "ready": {
+                const { note, blocks, isSaving, saveError, allNoteTitles, preview, deleteConfirmOpen } = s;
 
-        return html`
+                const renderStatus = () => {
+                    if (saveError) return html`<span class="text-red-500">${getErrorMessage(saveError)}</span>`;
+                    if (isSaving) return t("note.saving");
+                    return t("note.saved");
+                };
+
+                return html`
           <history-sidebar></history-sidebar>
 
-          <div 
+          <div
             class=${styles.container}
             @force-save=${this._handleForceSave}
-            @update-block=${this._handleBlockUpdate} 
+            @update-block=${this._handleBlockUpdate}
           >
             <div class=${styles.editor}>
               <div class=${styles.header}>
@@ -322,7 +329,7 @@ export class NotePage extends LitElement {
                    <h2 class=${styles.headerH2}>${t("note.edit_title")}</h2>
                    <div class="flex items-center gap-2">
                      <span class="text-xs text-zinc-400">In:</span>
-                     <select 
+                     <select
                        class="text-xs bg-transparent border-none text-zinc-600 font-medium focus:ring-0 cursor-pointer hover:text-zinc-900"
                        @change=${this._handleNotebookChange}
                      >
@@ -337,7 +344,7 @@ export class NotePage extends LitElement {
                 </div>
                 <div class="flex items-center gap-4">
                   <div class=${styles.status}>${renderStatus()}</div>
-                  
+
                   <button
                     class="rounded-full p-1.5 text-zinc-400 shadow-sm transition-colors hover:bg-zinc-100 hover:text-zinc-600"
                     title="View History"
@@ -364,16 +371,16 @@ export class NotePage extends LitElement {
                   </dropdown-menu>
                 </div>
               </div>
-              
+
               <input
                 type="text"
                 data-testid="note-title-input"
                 class=${styles.titleInput}
                 .value=${note.title}
                 @input=${(e: Event) =>
-                  this._handleInput({
-                    title: (e.target as HTMLInputElement).value,
-                  })}
+                        this._handleInput({
+                            title: (e.target as HTMLInputElement).value,
+                        })}
                 @keydown=${this._handleTitleKeyDown}
               />
 
@@ -405,7 +412,7 @@ export class NotePage extends LitElement {
                         default:
                             let initialDoc = null;
                             const textFields = block.fields as TiptapTextFields;
-                            
+
                             if (textFields && textFields.content) {
                                 initialDoc = textFields.content;
                             } else {
@@ -418,13 +425,13 @@ export class NotePage extends LitElement {
                                     }]
                                 };
                             }
-                            
+
                             return html`
                                 <tiptap-editor
                                     .blockId=${block.id}
                                     .initialContent=${initialDoc}
                                     .allNoteTitles=${allNoteTitles}
-                                    @update=${this._handleEditorUpdate} 
+                                    @update=${this._handleEditorUpdate}
                                     @update-task-status=${this._handleTaskUpdate}
                                     @click=${this._handleEditorClick}
                                     @link-hover=${this._handleLinkHover}
@@ -466,14 +473,14 @@ export class NotePage extends LitElement {
             </div>
 
             ${preview && preview.visible
-              ? html`<note-preview-card
+                        ? html`<note-preview-card
                   .title=${preview.title}
                   .snippet=${preview.snippet || ""}
                   .x=${preview.x}
                   .y=${preview.y}
-                  ?isLoading=${preview.snippet === null} 
+                  ?isLoading=${preview.snippet === null}
                 ></note-preview-card>`
-              : nothing}
+                        : nothing}
 
             <confirm-dialog
                 .open=${deleteConfirmOpen}
@@ -486,7 +493,7 @@ export class NotePage extends LitElement {
             ></confirm-dialog>
           </div>
         `;
-      }
+            }
+        }
     }
-  }
 }

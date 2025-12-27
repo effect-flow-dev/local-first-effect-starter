@@ -1,4 +1,4 @@
-// FILE: src/db/migrations/tenant-migrations-manifest.ts
+// File: ./src/db/migrations/tenant-migrations-manifest.ts
 import type { Migration } from "kysely";
 import * as m00 from "../../migrations/tenant/00_init_tenant";
 import * as m01 from "../../migrations/tenant/01_add_versioning_and_history";
@@ -7,7 +7,8 @@ import * as m03 from "../../migrations/tenant/03_backfill_global_versions";
 import * as m04 from "../../migrations/tenant/04_add_notebooks";
 import * as m05 from "../../migrations/tenant/05_shred_legacy_content"; 
 import * as m06 from "../../migrations/tenant/06_optimize_link_indexing";
-import * as m07 from "../../migrations/tenant/07_add_device_time"; // ✅ Added
+import * as m07 from "../../migrations/tenant/07_add_device_time";
+import * as m08 from "../../migrations/tenant/08_add_geolocation"; // ✅ Added
 
 export const tenantMigrationObjects: Record<string, Migration> = {
   "00_init_tenant": { up: m00.up, down: m00.down },
@@ -17,5 +18,6 @@ export const tenantMigrationObjects: Record<string, Migration> = {
   "04_add_notebooks": { up: m04.up, down: m04.down },
   "05_shred_legacy_content": { up: m05.up, down: m05.down },
   "06_optimize_link_indexing": { up: m06.up, down: m06.down },
-  "07_add_device_time": { up: m07.up, down: m07.down }, // ✅ Registered
+  "07_add_device_time": { up: m07.up, down: m07.down },
+  "08_add_geolocation": { up: m08.up, down: m08.down }, // ✅ Registered
 };

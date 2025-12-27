@@ -1,7 +1,6 @@
 // FILE: src/lib/shared/schemas.ts
 import { Schema } from "effect";
 
-// ... existing imports ...
 import type { NoteId, Note } from "../../types/generated/tenant/tenant_template/Note";
 import type { UserId, User } from "../../types/generated/central/public/User";
 import type { BlockId, Block } from "../../types/generated/tenant/tenant_template/Block";
@@ -383,6 +382,9 @@ const BlockBase = {
   created_at: LenientDateSchema,
   updated_at: LenientDateSchema,
   global_version: Schema.optional(Schema.String),
+  // ✅ NEW: Geospatial fields
+  latitude: Schema.optional(Schema.Number),
+  longitude: Schema.optional(Schema.Number),
 };
 
 export const TiptapTextBlockSchema = Schema.Struct({
