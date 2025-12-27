@@ -1,7 +1,7 @@
 // FILE: src/features/note/note.mutations.integration.test.ts
 import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { Effect } from "effect";
-import { handleCreateNote, handleCreateBlock } from "./note.mutations";
+import { handleCreateNote, handleCreateBlock, handleUpdateBlock } from "./note.mutations";
 import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
 import { randomUUID } from "node:crypto";
@@ -54,7 +54,7 @@ describe("Note Mutations (Integration)", () => {
         );
     });
 
-    // ✅ NEW TEST: Verify block creation order
+    // Verify block creation order
     it("handleCreateBlock should append blocks to the end of the note", async () => {
         await Effect.runPromise(
             Effect.gen(function* () {
@@ -98,9 +98,6 @@ describe("Note Mutations (Integration)", () => {
 
                 expect(blocks).toHaveLength(3); // Default + 2 new
 
-                // Default block (from createNote) is order 0.
-                // We use ! because we verified length is 3.
-
                 expect(blocks[1]!.id).toBe(block1Id);
                 expect(blocks[1]!.order).toBeGreaterThan(blocks[0]!.order);
 
@@ -111,7 +108,7 @@ describe("Note Mutations (Integration)", () => {
         );
     });
 
-    // ✅ NEW TEST: Verify Geolocation Persistence
+    // Verify Geolocation Persistence
     it("should persist latitude and longitude when creating blocks", async () => {
         await Effect.runPromise(
             Effect.gen(function* () {
@@ -146,6 +143,66 @@ describe("Note Mutations (Integration)", () => {
 
                 expect(block.latitude).toBeCloseTo(-33.8688);
                 expect(block.longitude).toBeCloseTo(151.2093);
+            })
+        );
+    });
+
+    // ✅ NEW TEST: Verify Alert Propagation (Fixed await)
+    it("should propagate 'due_at' field from Block JSON to Task Table", async () => {
+        await Effect.runPromise(
+            Effect.gen(function* () {
+                const userId = yield* setupUser;
+                const noteId = randomUUID() as NoteId;
+                const blockId = randomUUID() as BlockId;
+                const futureDate = new Date("2030-01-01T12:00:00Z");
+
+                // 1. Create Note & Task Block
+                yield* handleCreateNote(db, {
+                    id: noteId,
+                    userID: userId,
+                    title: "Alert Test",
+                });
+
+                yield* handleCreateBlock(db, {
+                    noteId,
+                    blockId,
+                    type: "task", // Now valid via schema update
+                    fields: { status: "todo", is_complete: false },
+                }, userId);
+
+                // 2. Ensure Task Record exists
+                // ✅ FIX: Wrapped in Effect.promise
+                yield* Effect.promise(() => db.insertInto("task")
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    .values({
+                        id: randomUUID(),
+                        user_id: userId,
+                        source_block_id: blockId,
+                        content: "Task Content",
+                        is_complete: false,
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    } as any)
+                    .execute()
+                );
+
+                // 3. Update Block with due_at
+                yield* handleUpdateBlock(db, {
+                    blockId,
+                    fields: { due_at: futureDate.toISOString() },
+                    version: 1,
+                }, userId);
+
+                // 4. Verify Task Table Update
+                const task = yield* Effect.promise(() =>
+                    db.selectFrom("task")
+                        .select("due_at")
+                        .where("source_block_id", "=", blockId)
+                        .executeTakeFirstOrThrow()
+                );
+
+                expect(task.due_at).toBeDefined();
+                expect(new Date(task.due_at!).toISOString()).toBe(futureDate.toISOString());
             })
         );
     });

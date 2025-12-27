@@ -13,7 +13,10 @@ export const TemplateItemSchema = Schema.Struct({
   type: Schema.Union(
       Schema.Literal("tiptap_text"),
       Schema.Literal("form_checklist"),
-      Schema.Literal("form_meter")
+      Schema.Literal("form_meter"),
+      Schema.Literal("map_block"),
+      Schema.Literal("task"),  // ✅ Added
+      Schema.Literal("image")  // ✅ Added
   ),
   fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   content: Schema.optional(Schema.String)
@@ -27,7 +30,6 @@ export const CreateNoteArgsSchema = Schema.Struct({
   notebookId: Schema.optional(NotebookIdSchema),
   template: Schema.optional(Schema.Array(TemplateItemSchema)),
   deviceCreatedAt: Schema.optional(LenientDateSchema), 
-  // ✅ NEW: Optional geo
   latitude: Schema.optional(Schema.Number),
   longitude: Schema.optional(Schema.Number),
 });
@@ -49,17 +51,18 @@ export const CreateBlockArgsSchema = Schema.Struct({
   type: Schema.Union(
       Schema.Literal("tiptap_text"),
       Schema.Literal("form_checklist"),
-      Schema.Literal("form_meter")
+      Schema.Literal("form_meter"),
+      Schema.Literal("map_block"),
+      Schema.Literal("task"),  // ✅ Added
+      Schema.Literal("image")  // ✅ Added
   ),
   content: Schema.optional(Schema.String),
   fields: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
   deviceCreatedAt: Schema.optional(LenientDateSchema),
-  // ✅ NEW: Optional geo
   latitude: Schema.optional(Schema.Number),
   longitude: Schema.optional(Schema.Number),
 });
 
-// ... existing Update/Revert schemas ...
 export const UpdateTaskArgsSchema = Schema.Struct({
   blockId: BlockIdSchema,
   isComplete: Schema.Boolean,
@@ -69,6 +72,13 @@ export const UpdateTaskArgsSchema = Schema.Struct({
 export const UpdateBlockArgsSchema = Schema.Struct({
   blockId: BlockIdSchema,
   fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  version: Schema.Number,
+});
+
+export const IncrementCounterArgsSchema = Schema.Struct({
+  blockId: BlockIdSchema,
+  key: Schema.String, 
+  delta: Schema.Number,
   version: Schema.Number,
 });
 

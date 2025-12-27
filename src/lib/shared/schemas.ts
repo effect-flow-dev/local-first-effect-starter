@@ -153,28 +153,31 @@ const InteractiveBlockSchema = Schema.Struct({
   attrs: Schema.Struct({
     blockId: Schema.NullOr(BlockIdTransformSchema),
     version: Schema.optional(Schema.Number),
-    // ✅ UPDATED: Added new block types to the union
     blockType: Schema.Union(
         Schema.Literal("task"), 
         Schema.Literal("image"), 
         Schema.Literal("form_checklist"), 
         Schema.Literal("form_meter"),
+        Schema.Literal("map_block"),
         Schema.Literal("tiptap_text")
     ),
     fields: Schema.Struct({
       is_complete: Schema.optional(Schema.Boolean), 
       status: Schema.optional(TaskStatusSchema), 
+      // ✅ NEW: Add due_at field for alerts
+      due_at: Schema.optional(Schema.String),
       url: Schema.optional(Schema.NullOr(Schema.String)),
       uploadId: Schema.optional(Schema.NullOr(Schema.String)),
       width: Schema.optional(Schema.Number),
       caption: Schema.optional(Schema.String),
-      // ✅ Added support for flexible fields (checklists, meters)
       items: Schema.optional(Schema.Unknown),
       value: Schema.optional(Schema.Number),
       min: Schema.optional(Schema.Number),
       max: Schema.optional(Schema.Number),
       unit: Schema.optional(Schema.String),
       label: Schema.optional(Schema.String),
+      zoom: Schema.optional(Schema.Number),
+      style: Schema.optional(Schema.String),
     }),
   }),
   content: Schema.optional(Schema.Array(TiptapTextNodeSchema)),
@@ -365,6 +368,11 @@ export const MeterFieldsSchema = Schema.Struct({
   unit: Schema.String,
 });
 
+export const MapBlockFieldsSchema = Schema.Struct({
+  zoom: Schema.optional(Schema.Number),
+  style: Schema.optional(Schema.String),
+});
+
 // Base structure for all blocks
 const BlockBase = {
   id: BlockIdSchema,
@@ -382,7 +390,6 @@ const BlockBase = {
   created_at: LenientDateSchema,
   updated_at: LenientDateSchema,
   global_version: Schema.optional(Schema.String),
-  // ✅ NEW: Geospatial fields
   latitude: Schema.optional(Schema.Number),
   longitude: Schema.optional(Schema.Number),
 };
@@ -405,6 +412,12 @@ export const FormMeterBlockSchema = Schema.Struct({
   fields: MeterFieldsSchema,
 });
 
+export const MapBlockSchema = Schema.Struct({
+  ...BlockBase,
+  type: Schema.Literal("map_block"),
+  fields: MapBlockFieldsSchema,
+});
+
 // Legacy / Generic support
 export const GenericBlockSchema = Schema.Struct({
   ...BlockBase,
@@ -416,6 +429,7 @@ export const BlockSchema = Schema.Union(
   TiptapTextBlockSchema,
   FormChecklistBlockSchema,
   FormMeterBlockSchema,
+  MapBlockSchema,
   GenericBlockSchema
 );
 
@@ -423,3 +437,4 @@ export type AppBlock = Schema.Schema.Type<typeof BlockSchema>;
 export type TiptapTextBlock = Schema.Schema.Type<typeof TiptapTextBlockSchema>;
 export type FormChecklistBlock = Schema.Schema.Type<typeof FormChecklistBlockSchema>;
 export type FormMeterBlock = Schema.Schema.Type<typeof FormMeterBlockSchema>;
+export type MapBlock = Schema.Schema.Type<typeof MapBlockSchema>;

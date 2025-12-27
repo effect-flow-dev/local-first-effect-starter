@@ -20,6 +20,7 @@ import {
   update,
 } from "./profile-page.logic";
 import { clientLog } from "../../lib/client/clientLog";
+import { subscribeToPush } from "../../lib/client/push"; // ✅ Imported Push Service
 
 @customElement("profile-page")
 export class ProfilePage extends LitElement {
@@ -52,16 +53,14 @@ export class ProfilePage extends LitElement {
   }
 
   private _handleSideEffects(action: Action, _prevState: ProfilePageState) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
     return Effect.gen(function* () {
       switch (action.type) {
         case "UPLOAD_AVATAR_SUCCESS": {
-          // When avatar upload succeeds, we need to update the global auth store
-          // so the header and other components reflect the new image immediately.
           const auth = authState.value;
           if (auth.user) {
             const updatedUser = { ...auth.user, avatar_url: action.payload };
-            // ✅ FIX: Update payload structure to { user: updatedUser }
-            // Preserving existing tenant context if any
             void proposeAuthAction({
               type: "SET_AUTHENTICATED",
               payload: { 
@@ -73,8 +72,20 @@ export class ProfilePage extends LitElement {
           }
           break;
         }
+        // ✅ NEW: Handle Push Subscription
+        case "ENABLE_NOTIFICATIONS_START": {
+            const result = yield* Effect.either(subscribeToPush());
+            if (Either.isRight(result)) {
+                self.dispatch({ type: "ENABLE_NOTIFICATIONS_SUCCESS" });
+            } else {
+                const error = result.left;
+                const msg = error instanceof Error ? error.message : "Failed to enable notifications";
+                self.dispatch({ type: "ENABLE_NOTIFICATIONS_ERROR", payload: msg });
+            }
+            break;
+        }
       }
-    }.bind(this));
+    });
   }
 
   override connectedCallback(): void {
@@ -112,7 +123,6 @@ export class ProfilePage extends LitElement {
       const formData = new FormData();
       formData.append("avatar", file);
 
-      // 2. Attach Authorization header to the raw fetch
       const response = yield* Effect.tryPromise({
         try: () =>
           fetch("/api/user/avatar", {
@@ -184,8 +194,8 @@ export class ProfilePage extends LitElement {
 
     const isUploading = interaction.type === "uploading_avatar";
     const isChangingPassword = interaction.type === "changing_password";
+    const isEnablingNotifications = interaction.type === "enabling_notifications"; // ✅
 
-    // Determine message styles
     const messageClass = feedback
       ? feedback.type === "success"
         ? styles.messageSuccess
@@ -232,13 +242,22 @@ export class ProfilePage extends LitElement {
                         this.querySelector("#avatar-upload") as HTMLElement
                       )?.click(),
                     loading: isUploading,
-                    disabled: isUploading, // Prevent double upload
+                    disabled: isUploading || isEnablingNotifications,
                   })}
                   ${NotionButton({
                     children: t("profile.change_password"),
                     onClick: () =>
                       this.dispatch({ type: "TOGGLE_PASSWORD_FORM" }),
-                    disabled: isUploading, // Disable while uploading
+                    disabled: isUploading || isEnablingNotifications,
+                  })}
+                  
+                  <!-- ✅ NEW: Notifications Button -->
+                  ${NotionButton({
+                    children: isEnablingNotifications ? "Enabling..." : "Enable Notifications",
+                    onClick: () =>
+                      this.dispatch({ type: "ENABLE_NOTIFICATIONS_START" }),
+                    loading: isEnablingNotifications,
+                    disabled: isUploading || isEnablingNotifications,
                   })}
                 </div>`}
           </div>

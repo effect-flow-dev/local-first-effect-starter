@@ -299,3 +299,77 @@ export const revertBlock = async (
         }
     }
 };
+
+export const incrementCounter = async (
+    tx: WriteTransaction,
+    args: {
+        blockId: BlockId;
+        key: string;
+        delta: number;
+        version: number;
+    }
+) => {
+    // 1. Update the Block Record (Fast, Indexed)
+    const blockKey = `block/${args.blockId}`;
+    const blockVal = await tx.get(blockKey);
+
+    if (!blockVal) {
+        console.warn(`[Mutator] incrementCounter: Block ${args.blockId} not found`);
+        return;
+    }
+
+    const block = blockVal as unknown as SerializedBlock;
+    const currentFields = block.fields || {};
+    // Default to 0 if the field is missing or not a number
+    const oldVal = (typeof currentFields[args.key] === 'number')
+        ? (currentFields[args.key] as number)
+        : 0;
+    
+    const newVal = oldVal + args.delta;
+
+    const updatedBlock = {
+        ...block,
+        fields: { ...currentFields, [args.key]: newVal },
+        version: (block.version || 0) + 1,
+        updated_at: new Date().toISOString()
+    };
+
+    await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
+
+    // 2. Update the Embedding Note (Hybrid Compatibility)
+    if (block.note_id) {
+        const noteKey = `note/${block.note_id}`;
+        const noteVal = await tx.get(noteKey);
+        
+        if (noteVal) {
+            const note = noteVal as unknown as NoteStructure;
+            if (note.content && Array.isArray(note.content.content)) {
+                // Helper to traverse and update
+                const updateNode = (nodes: TraversalNode[]): boolean => {
+                    let changed = false;
+                    for (const node of nodes) {
+                        if (node.attrs?.blockId === args.blockId) {
+                            if (!node.attrs.fields) node.attrs.fields = {};
+                            node.attrs.fields[args.key] = newVal;
+                            node.attrs.version = (node.attrs.version || 0) + 1;
+                            changed = true;
+                        }
+                        if (node.content && Array.isArray(node.content)) {
+                            if (updateNode(node.content)) changed = true;
+                        }
+                    }
+                    return changed;
+                };
+
+                const changed = updateNode(note.content.content);
+                if (changed) {
+                    await tx.set(noteKey, {
+                        ...note,
+                        version: (note.version || 0) + 1,
+                        updated_at: new Date().toISOString()
+                    } as unknown as ReadonlyJSONValue);
+                }
+            }
+        }
+    }
+};

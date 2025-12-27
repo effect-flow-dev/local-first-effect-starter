@@ -9,7 +9,7 @@ import {
 } from "./lib/client/stores/authStore";
 import { clientLog } from "./lib/client/clientLog";
 import { runClientUnscoped } from "./lib/client/runtime";
-import { startMediaPrefetch } from "./lib/client/MediaCacheService";
+// REMOVED: startMediaPrefetch import
 import { initPWA } from "./lib/client/stores/pwaStore";
 
 // --- 1. Persistent Storage Request (Critical for Offline Data) ---
@@ -78,7 +78,7 @@ if (handoffToken) {
 }
 
 initializeAuthStore();
-startMediaPrefetch();
+// REMOVED: startMediaPrefetch(); -> Moved to runtime.ts
 
 const token = localStorage.getItem("jwt");
 

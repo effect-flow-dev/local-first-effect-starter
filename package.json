@@ -98,7 +98,9 @@
     "@tiptap/html": "^3.0.7",
     "@tiptap/pm": "^3.0.7",
     "@tiptap/starter-kit": "^3.0.7",
+    "@types/leaflet": "^1.9.21",
     "@types/turndown": "^5.0.5",
+    "@types/web-push": "^3.6.4",
     "@vitejs/plugin-basic-ssl": "^2.1.0",
     "@zag-js/core": "^1.31.0",
     "@zag-js/select": "^1.31.0",
@@ -114,12 +116,14 @@
     "kanel-kysely": "^0.7.1",
     "koa-proxies": "^0.12.4",
     "kysely": "^0.28.2",
+    "leaflet": "^1.9.4",
     "lit": "^3.3.1",
     "marked": "^16.1.1",
     "oslo": "^1.2.1",
     "pg": "^8.16.3",
     "replicache": "^15.3.0",
-    "turndown": "^7.2.0"
+    "turndown": "^7.2.0",
+    "web-push": "^3.6.7"
   },
   "imports": {
     "#app/actions": {

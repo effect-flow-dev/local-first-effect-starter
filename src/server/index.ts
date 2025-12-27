@@ -10,10 +10,18 @@ import { infraRoutes } from "./routes/infra";
 import { mediaRoutes } from "./routes/media";
 import { logRoutes } from "./routes/log";
 import { noteRoutes } from "./routes/note";
+import { pushRoutes } from "./routes/push"; // ✅ Step 5: Import Push Routes
 import { subscribe } from "../lib/server/PokeService";
 import { validateToken } from "../lib/server/JwtService";
 import { Effect, Stream } from "effect";
 import { effectPlugin } from "./middleware/effect-plugin";
+import { alertWorkerLive } from "../features/alerts/alert.worker"; // ✅ Step 6: Import Worker
+import { serverRuntime } from "../lib/server/server-runtime"; // ✅ Step 6: Import Runtime
+
+// ✅ Step 6: Start Background Alert Worker
+// We use the serverRuntime to ensure telemetry/logging context is maintained
+serverRuntime.runFork(alertWorkerLive);
+console.info("🚀 Background Alert Worker started.");
 
 const app = new Elysia()
   .onError(({ code, error, request }) => {
@@ -22,15 +30,14 @@ const app = new Elysia()
       error,
     );
   })
-  // ✅ FIX: Allow 127.0.0.1 for Playwright/E2E testing
   .use(cors({
     origin: [
-        /localhost.*/,           // Browser Dev
-        /127\.0\.0\.1.*/,        // Playwright / E2E
-        /.*\.life-io\.xyz/,      // Web Production Wildcard
-        "https://life-io.xyz",   // Web Production Root
-        "capacitor://localhost", // iOS Capacitor
-        "http://localhost",      // Android Capacitor
+        /localhost.*/,           
+        /127\.0\.0\.1.*/,        
+        /.*\.life-io\.xyz/,      
+        "https://life-io.xyz",   
+        "capacitor://localhost", 
+        "http://localhost",      
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Life-IO-Subdomain"],
@@ -44,6 +51,7 @@ const app = new Elysia()
   .use(mediaRoutes)
   .use(logRoutes)
   .use(noteRoutes)
+  .use(pushRoutes) // ✅ Step 5: Register Push Routes
   .ws("/ws", {
     async open(ws) {
       const protocolHeader = ws.data.request.headers.get(

@@ -47,7 +47,7 @@ export class MeterInput extends LitElement {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
 
     this._debounceTimer = setTimeout(() => {
-      runClientUnscoped(clientLog("debug", `[Meter] Emitting value ${this._localValue}`));
+      runClientUnscoped(clientLog("debug", `[Meter] Emitting absolute value ${this._localValue}`));
       this.dispatchEvent(
         new CustomEvent("update-block", {
           bubbles: true,
@@ -62,10 +62,31 @@ export class MeterInput extends LitElement {
   }
 
   private _handleChange(delta: number) {
+    // 1. Cancel any pending absolute updates (e.g. from typing) to avoid race conditions
+    if (this._debounceTimer) clearTimeout(this._debounceTimer);
+
+    // 2. Optimistic UI update
+    // We update local state so the number changes instantly for the user
     this._localValue = Number((this._localValue + delta).toFixed(2));
     this._validate();
-    this.requestUpdate(); // Force re-render of local state
-    this._emitUpdate();
+    this.requestUpdate(); 
+
+    // 3. Dispatch Atomic Increment Event
+    // Instead of setting the absolute value, we send the delta.
+    // This allows the server to handle concurrent updates cleanly (e.g. +1 from User A, +1 from User B = +2).
+    runClientUnscoped(clientLog("debug", `[Meter] Dispatching atomic increment: ${delta}`));
+    
+    this.dispatchEvent(
+      new CustomEvent("increment-block", {
+        bubbles: true,
+        composed: true,
+        detail: {
+          blockId: this.blockId,
+          key: "value",
+          delta: delta,
+        },
+      })
+    );
   }
 
   // ✅ FIX: Use arrow function property to bind 'this' correctly for event listeners
@@ -75,6 +96,7 @@ export class MeterInput extends LitElement {
       this._localValue = val;
       this._validate();
       this.requestUpdate();
+      // Manual typing uses Last-Write-Wins (Absolute Set)
       this._emitUpdate();
     }
   };

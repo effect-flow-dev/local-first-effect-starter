@@ -90,8 +90,13 @@ export class InteractiveBlockNodeView implements NodeView {
       this.taskView.contentEditable = "false"; 
 
       const status = this.node.attrs.fields?.status || (this.node.attrs.fields?.is_complete ? "done" : "todo");
+      const dueAt = this.node.attrs.fields?.due_at || ""; // ✅ Get due_at
       
       this.taskView.setAttribute("status", status);
+      if (dueAt) {
+          this.taskView.setAttribute("dueAt", dueAt); // ✅ Pass dueAt prop
+      }
+      
       if (this.node.attrs.fields?.is_complete) {
         this.taskView.setAttribute("isComplete", "true");
       }
@@ -162,7 +167,15 @@ export class InteractiveBlockNodeView implements NodeView {
 
     if (this.node.attrs.blockType === "task" && this.taskView) {
       const status = this.node.attrs.fields?.status || (this.node.attrs.fields?.is_complete ? "done" : "todo");
+      const dueAt = this.node.attrs.fields?.due_at || ""; // ✅
+      
       this.taskView.setAttribute("status", status);
+      // Update or remove attribute
+      if (dueAt) {
+          this.taskView.setAttribute("dueAt", dueAt);
+      } else {
+          this.taskView.removeAttribute("dueAt");
+      }
     }
 
     if (this.node.attrs.blockType === "image" && this.imageComponent) {

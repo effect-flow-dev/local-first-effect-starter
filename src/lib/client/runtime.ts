@@ -12,6 +12,8 @@ import { clientLog } from "./clientLog";
 import { LocationLive, LocationService } from "./LocationService";
 import { ReplicacheLive, ReplicacheService } from "./replicache";
 import { MediaSyncLive, MediaSyncService } from "./media/MediaSyncService";
+import { startMapPrefetch } from "./MapCacheService"; 
+import { startMediaPrefetch } from "./MediaCacheService"; // ✅ NEW: Import Media Prefetch
 import type { PublicUser } from "../shared/schemas";
 import { addToast } from "./stores/toastStore";
 
@@ -65,9 +67,14 @@ export const activateReplicacheRuntime = (user: PublicUser) =>
     );
     clientRuntime = newRuntime;
 
+    // ✅ Start Background Services
+    // These depend on Replicache being active.
+    startMapPrefetch();
+    startMediaPrefetch(); // ✅ NEW: Start Media Prefetcher here
+
     yield* clientLog(
       "info",
-      "<-- [runtime] Replicache & MediaSync runtimes activated successfully.",
+      "<-- [runtime] Replicache, MediaSync, MapCache & MediaCache runtimes activated successfully.",
     );
   });
 

@@ -12,7 +12,9 @@ export interface Feedback {
 export type ProfileInteraction =
   | { type: "view" }
   | { type: "uploading_avatar" }
-  | { type: "changing_password" }; // Shows the form
+  | { type: "changing_password" }
+  // ✅ NEW: Enabling notifications
+  | { type: "enabling_notifications" };
 
 export interface InitializingState {
   readonly status: "initializing";
@@ -34,11 +36,15 @@ export const INITIAL_STATE: ProfilePageState = { status: "initializing" };
 export type Action =
   | { type: "AUTH_UPDATED"; payload: AuthModel }
   | { type: "UPLOAD_AVATAR_START" }
-  | { type: "UPLOAD_AVATAR_SUCCESS"; payload: string } // Payload: new Avatar URL
+  | { type: "UPLOAD_AVATAR_SUCCESS"; payload: string } 
   | { type: "UPLOAD_AVATAR_ERROR"; payload: AvatarUploadError }
   | { type: "TOGGLE_PASSWORD_FORM" }
   | { type: "PASSWORD_CHANGED" }
-  | { type: "PASSWORD_CHANGE_CANCELLED" };
+  | { type: "PASSWORD_CHANGE_CANCELLED" }
+  // ✅ NEW: Notification Actions
+  | { type: "ENABLE_NOTIFICATIONS_START" }
+  | { type: "ENABLE_NOTIFICATIONS_SUCCESS" }
+  | { type: "ENABLE_NOTIFICATIONS_ERROR"; payload: string };
 
 // --- Reducer ---
 
@@ -48,7 +54,6 @@ export const update = (
 ): ProfilePageState => {
   switch (action.type) {
     case "AUTH_UPDATED": {
-      // If we were initializing, we now become ready with the auth data.
       if (state.status === "initializing") {
         return {
           status: "ready",
@@ -57,7 +62,6 @@ export const update = (
           feedback: null,
         };
       }
-      // If we were already ready, just update the auth model.
       return {
         ...state,
         auth: action.payload,
@@ -74,8 +78,6 @@ export const update = (
 
     case "UPLOAD_AVATAR_SUCCESS":
       if (state.status !== "ready") return state;
-      // Note: We don't update auth.user.avatar_url here directly;
-      // the side effect will trigger an auth store update which dispatches AUTH_UPDATED.
       return {
         ...state,
         interaction: { type: "view" },
@@ -118,6 +120,31 @@ export const update = (
         ...state,
         interaction: { type: "view" },
         feedback: null,
+      };
+
+    // ✅ NEW: Notifications Logic
+    case "ENABLE_NOTIFICATIONS_START":
+      if (state.status !== "ready") return state;
+      return {
+        ...state,
+        interaction: { type: "enabling_notifications" },
+        feedback: null,
+      };
+
+    case "ENABLE_NOTIFICATIONS_SUCCESS":
+      if (state.status !== "ready") return state;
+      return {
+        ...state,
+        interaction: { type: "view" },
+        feedback: { type: "success", message: "Push notifications enabled!" },
+      };
+
+    case "ENABLE_NOTIFICATIONS_ERROR":
+      if (state.status !== "ready") return state;
+      return {
+        ...state,
+        interaction: { type: "view" },
+        feedback: { type: "error", message: action.payload },
       };
 
     default:

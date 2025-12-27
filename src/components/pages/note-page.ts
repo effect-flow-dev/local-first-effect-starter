@@ -27,6 +27,7 @@ import { getCurrentPosition } from "../../lib/client/geolocation";
 import "../editor/tiptap-editor";
 import "../blocks/smart-checklist";
 import "../blocks/meter-input";
+import "../blocks/map-block"; // ✅ NEW: Import Map Component
 import "../ui/note-preview-card";
 import "../ui/dropdown-menu";
 import "../ui/confirm-dialog";
@@ -60,6 +61,11 @@ interface MeterFields {
     min: number;
     max: number;
     unit: string;
+}
+
+interface MapFields {
+    zoom?: number;
+    style?: string;
 }
 
 interface TiptapTextFields {
@@ -157,7 +163,36 @@ export class NotePage extends LitElement {
         }));
     };
 
-    private _handleAddBlock = (type: "tiptap_text" | "form_checklist" | "form_meter") => {
+    private _handleIncrementBlock = (e: Event) => {
+        e.stopPropagation();
+        const detail = (e as CustomEvent<{ blockId: BlockId; key: string; delta: number }>).detail;
+        const { blockId, key, delta } = detail;
+
+        const currentState = this.state.peek();
+        let currentVersion = 1;
+
+        if (currentState.status === "ready") {
+            const block = currentState.blocks.find(b => b.id === blockId);
+            if (block) {
+                currentVersion = block.version;
+            }
+        }
+
+        runClientUnscoped(Effect.gen(function* () {
+            const replicache = yield* ReplicacheService;
+            yield* Effect.promise(() =>
+                replicache.client.mutate.incrementCounter({
+                    blockId,
+                    key,
+                    delta,
+                    version: currentVersion
+                })
+            );
+        }));
+    };
+
+    // ✅ UPDATED: Add 'map_block' to the type definition
+    private _handleAddBlock = (type: "tiptap_text" | "form_checklist" | "form_meter" | "map_block") => {
         const noteId = this.id as NoteId;
         const blockId = uuidv4() as BlockId;
 
@@ -166,21 +201,25 @@ export class NotePage extends LitElement {
             initialFields = { items: [{ id: uuidv4(), label: "New Item", checked: false }] };
         } else if (type === "form_meter") {
             initialFields = { label: "New Meter", value: 0, min: 0, max: 100, unit: "%" };
+        } else if (type === "map_block") {
+            // Default zoom, location will be filled by geo below or default 0,0
+            initialFields = { zoom: 13 };
         }
 
         runClientUnscoped(Effect.gen(function* () {
-            // ✅ FIX: Capture Geolocation
+            // ✅ Capture Geolocation (re-used for Map blocks to set initial center)
             const location = yield* getCurrentPosition();
 
             yield* clientLog("info", `[NotePage] Adding block ${type} at`, location);
             const replicache = yield* ReplicacheService;
+            
             yield* Effect.promise(() =>
                 replicache.client.mutate.createBlock({
                     noteId,
                     blockId,
                     type,
                     fields: initialFields,
-                    // ✅ FIX: Pass coords
+                    // ✅ Pass coords - critical for Map Block indexing
                     latitude: location?.latitude,
                     longitude: location?.longitude,
                 })
@@ -322,6 +361,7 @@ export class NotePage extends LitElement {
             class=${styles.container}
             @force-save=${this._handleForceSave}
             @update-block=${this._handleBlockUpdate}
+            @increment-block=${this._handleIncrementBlock}
           >
             <div class=${styles.editor}>
               <div class=${styles.header}>
@@ -408,6 +448,17 @@ export class NotePage extends LitElement {
                                     .unit=${meterFields.unit || ""}
                                 ></meter-input>
                             `;
+                        // ✅ NEW: Map Block Renderer
+                        case 'map_block':
+                            const mapFields = block.fields as MapFields;
+                            return html`
+                                <map-block
+                                    .blockId=${block.id}
+                                    .latitude=${block.latitude ?? 51.505}
+                                    .longitude=${block.longitude ?? -0.09}
+                                    .zoom=${mapFields.zoom ?? 13}
+                                ></map-block>
+                            `;
                         case 'tiptap_text':
                         default:
                             let initialDoc = null;
@@ -465,6 +516,11 @@ export class NotePage extends LitElement {
                         <button class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50" @click=${() => this._handleAddBlock("form_meter")}>
                             <svg class="text-zinc-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
                             <span>Meter Input</span>
+                        </button>
+                        <!-- ✅ NEW: Map Option -->
+                        <button class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50" @click=${() => this._handleAddBlock("map_block")}>
+                            <svg class="text-zinc-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></svg>
+                            <span>Map</span>
                         </button>
                     </div>
                 </dropdown-menu>

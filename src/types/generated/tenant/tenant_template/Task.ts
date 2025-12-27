@@ -28,6 +28,12 @@ export default interface TaskTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 
   global_version: ColumnType<string, string | undefined, string>;
+
+  due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+
+  assignee_id: ColumnType<string | null, string | null, string | null>;
+
+  alert_sent_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 export type Task = Selectable<TaskTable>;

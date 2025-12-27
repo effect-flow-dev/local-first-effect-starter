@@ -37,10 +37,12 @@ export const ReplicacheLive = (user: PublicUser) => {
         mutators,
         indexes: {
           blocksByNoteId: { jsonPointer: "/note_id", allowEmpty: true },
-          // ✅ NEW: Index for media prefetching. 
-          // Indexes all blocks (prefix: "block/") that have a "url" in their fields.
-          // This allows scanning ONLY the images without loading entire note bodies.
+          // Index for media prefetching (URL presence)
           imagesByUrl: { prefix: "block/", jsonPointer: "/fields/url" },
+          // ✅ NEW: Index for Offline Map Caching
+          // Allows scanning all blocks that have a valid latitude.
+          // The MapCacheService uses this to find blocks needing tile downloads.
+          blocksByGeo: { prefix: "block/", jsonPointer: "/latitude" },
         },
         logLevel: "debug",
         pullInterval: 5000,

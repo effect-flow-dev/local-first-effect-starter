@@ -16,6 +16,7 @@ import {
   handleRevertBlock,
   handleRevertNote,
   handleCreateBlock,
+  handleIncrementCounter, // ✅ Import handler
   RevertBlockArgsSchema,
   RevertNoteArgsSchema,
   CreateNoteArgsSchema,
@@ -24,6 +25,7 @@ import {
   UpdateTaskArgsSchema,
   UpdateBlockArgsSchema,
   CreateBlockArgsSchema,
+  IncrementCounterArgsSchema, // ✅ Import schema
 } from "../note/note.mutations";
 import {
   handleCreateNotebook,
@@ -95,6 +97,7 @@ const MUTATION_PERMISSIONS: Record<string, Permission> = {
     deleteNotebook: PERMISSIONS.NOTEBOOK_DELETE,
     revertBlock: PERMISSIONS.BLOCK_EDIT,
     revertNote: PERMISSIONS.NOTE_EDIT,
+    incrementCounter: PERMISSIONS.BLOCK_EDIT, // ✅ Permission mapping
 };
 
 // --- Main Handler ---
@@ -226,6 +229,10 @@ export const handlePush = (
               } else if (name === "revertNote") {
                 const a = yield* Schema.decodeUnknown(RevertNoteArgsSchema)(args);
                 yield* handleRevertNote(trx, a, user.id);
+              } else if (name === "incrementCounter") {
+                // ✅ Handle atomic increment
+                const a = yield* Schema.decodeUnknown(IncrementCounterArgsSchema)(args);
+                yield* handleIncrementCounter(trx, a, user.id);
               }
             });
 

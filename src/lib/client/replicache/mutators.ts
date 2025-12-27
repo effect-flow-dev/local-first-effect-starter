@@ -1,7 +1,7 @@
 // FILE: src/lib/client/replicache/mutators.ts
 import { createNote, updateNote, deleteNote, revertNote } from "./mutators/note";
 import { createNotebook, deleteNotebook } from "./mutators/notebook";
-import { updateTask, updateBlock, revertBlock, createBlock } from "./mutators/block"; // ✅ Added createBlock
+import { updateTask, updateBlock, revertBlock, createBlock, incrementCounter } from "./mutators/block";
 
 export const mutators = {
   createNote,
@@ -12,7 +12,8 @@ export const mutators = {
   deleteNotebook,
   updateTask,
   updateBlock,
-  createBlock, // ✅ Added
+  createBlock,
+  incrementCounter, // ✅ Added
   revertBlock,
 };
 

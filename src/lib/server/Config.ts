@@ -38,4 +38,10 @@ export const config = {
   jwt: {
     secret: getEnv("JWT_SECRET"),
   },
+  // ✅ FIX: Added VAPID config to resolve TS2339 in push.ts
+  vapid: {
+    publicKey: getEnv("VAPID_PUBLIC_KEY"),
+    privateKey: getEnv("VAPID_PRIVATE_KEY"),
+    subject: getEnv("VAPID_SUBJECT"),
+  },
 };

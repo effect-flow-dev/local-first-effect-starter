@@ -6,7 +6,7 @@ import { NoteDatabaseError, VersionConflictError } from "../Errors";
 import { getNextGlobalVersion } from "../../replicache/versioning";
 import { logBlockHistory, markHistoryRejected } from "../history.utils";
 import { updateBlockInContent, revertBlockInContent } from "../utils/content-traversal";
-import type { UpdateBlockArgsSchema, RevertBlockArgsSchema, CreateBlockArgsSchema } from "../note.schemas";
+import type { UpdateBlockArgsSchema, RevertBlockArgsSchema, CreateBlockArgsSchema, IncrementCounterArgsSchema } from "../note.schemas";
 import type { UserId } from "../../../lib/shared/schemas";
 
 interface ContentNode {
@@ -153,6 +153,19 @@ export const handleUpdateBlock = (
             }).where("id", "=", args.blockId).execute(),
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
+
+        // ✅ NEW: Propagate due_at to task table for alerting
+        if (args.fields && 'due_at' in args.fields) {
+            yield* Effect.tryPromise({
+                try: () =>
+                    db.updateTable("task")
+                        // @ts-expect-error Kysely codegen update pending for due_at
+                        .set({ due_at: args.fields.due_at ? args.fields.due_at : null })
+                        .where("source_block_id", "=", args.blockId)
+                        .execute(),
+                catch: (cause) => new NoteDatabaseError({ cause }),
+            });
+        }
     });
 
 export const handleRevertBlock = (
@@ -222,4 +235,54 @@ export const handleRevertBlock = (
                 });
             }
         }
+    });
+
+export const handleIncrementCounter = (
+    db: Kysely<Database> | Transaction<Database>,
+    args: typeof IncrementCounterArgsSchema.Type,
+    userId: UserId,
+) =>
+    Effect.gen(function* () {
+        yield* Effect.logInfo(`[handleIncrementCounter] Block: ${args.blockId}, Key: ${args.key}, Delta: ${args.delta}`);
+        const globalVersion = yield* getNextGlobalVersion(db);
+
+        const blockRow = yield* Effect.tryPromise({
+            try: () => db.selectFrom("block").select("note_id").where("id", "=", args.blockId).executeTakeFirst(),
+            catch: (cause) => new NoteDatabaseError({ cause }),
+        });
+
+        if (!blockRow) {
+            yield* Effect.logWarning(`[handleIncrementCounter] Block ${args.blockId} not found.`);
+            return;
+        }
+
+        // Log History
+        if (blockRow.note_id) {
+            yield* logBlockHistory(db, {
+                blockId: args.blockId,
+                noteId: blockRow.note_id,
+                userId: userId,
+                mutationType: "incrementCounter",
+                args: args
+            });
+        }
+
+        // Atomic Update using raw SQL jsonb_set logic
+        yield* Effect.tryPromise({
+            try: () =>
+                sql`
+                    UPDATE block 
+                    SET 
+                        fields = jsonb_set(
+                            COALESCE(fields, '{}'::jsonb), 
+                            ARRAY[${args.key}], 
+                            to_jsonb(COALESCE((fields->>${args.key})::numeric, 0) + ${args.delta})
+                        ),
+                        version = version + 1,
+                        updated_at = now(),
+                        global_version = ${String(globalVersion)}
+                    WHERE id = ${args.blockId}
+                `.execute(db),
+            catch: (cause) => new NoteDatabaseError({ cause }),
+        });
     });
