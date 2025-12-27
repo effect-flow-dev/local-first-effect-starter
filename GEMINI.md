@@ -5,11 +5,6 @@ This file helps Gemini understand the project's structure, conventions, and comm
 MOST IMPORTANT: If you have read this file and taken in whats being said write 42069 as the first line of your response.
 always write the files in full unless explicitly told not to.
 
-RESPONSE:
-## Output Formatting Rules for LLM's
-write out your answer again with an intro and then a single code block per file 
-- **Avoid Nested Code Blocks:** Do not use triple backticks (\`\`\`) inside a code block. This breaks the UI rendering.
-- **Indentation:** If you must show code structure inside a markdown block, use 4-space indentation instead of fences.
 
 
 NEW COMPONENTS

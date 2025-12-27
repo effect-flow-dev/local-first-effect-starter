@@ -1,6 +1,12 @@
 // FILE: src/lib/client/replicache/mutators/block.ts
+import { Schema } from "effect";
 import type { WriteTransaction, ReadonlyJSONValue } from "replicache";
-import type { BlockId, NoteId, UserId } from "../../../shared/schemas";
+import { 
+    type BlockId, 
+    type NoteId, 
+    type UserId, 
+    CreateBlockArgsSchema 
+} from "../../../shared/schemas"; // ✅ Correct Import path
 import type { TraversalNode, NoteStructure, BlockStructure } from "./types";
 
 export interface SerializedBlock {
@@ -21,9 +27,9 @@ export interface SerializedBlock {
     transclusions: string[];
     file_path: string;
     parent_id: string | null;
-    // ✅ NEW: Geo fields
     latitude?: number;
     longitude?: number;
+    device_created_at?: string;
     _tag: "block";
 }
 
@@ -35,40 +41,40 @@ interface BlockOrderPartial {
 
 export const createBlock = async (
     tx: WriteTransaction,
-    args: {
-        noteId: NoteId;
-        blockId: BlockId;
-        type: string;
-        content?: string;
-        fields?: Record<string, unknown>;
-        // ✅ NEW: Geo arguments
-        latitude?: number;
-        longitude?: number;
-    }
+    args: Schema.Schema.Type<typeof CreateBlockArgsSchema>
 ) => {
-    // 1. Calculate Order
+    // 1. Strict Validation (Optimistic Guard)
+    const validatedArgs = Schema.decodeUnknownSync(CreateBlockArgsSchema)(args);
+
+    // 2. Calculate Order
     const blocks = await tx.scan({ prefix: "block/" }).values().toArray();
-    const noteBlocks = (blocks as unknown as BlockOrderPartial[]).filter(b => b.note_id === args.noteId);
+    const noteBlocks = (blocks as unknown as BlockOrderPartial[]).filter(b => b.note_id === validatedArgs.noteId);
 
     const maxOrder = noteBlocks.reduce((max: number, b) => Math.max(max, b.order || 0), 0);
     const nextOrder = maxOrder + 1;
 
-    // 2. Create Block
+    // 3. Create Block
     const now = new Date().toISOString();
 
-    const note = await tx.get(`note/${args.noteId}`) as NoteStructure | undefined;
+    const note = await tx.get(`note/${validatedArgs.noteId}`) as NoteStructure | undefined;
     const userId = (note && typeof note['user_id'] === 'string')
         ? note['user_id']
         : "unknown-user";
 
+    // Extract fields safely
+    // Since validatedArgs is a Union, we access fields generically.
+    // 'fields' exists on all members of CreateBlockArgsSchema, though its type varies.
+    // We can cast to any/Record for the storage format which is generic.
+    const fields = (validatedArgs as { fields?: Record<string, unknown> }).fields || {};
+
     const newBlock: SerializedBlock = {
         _tag: "block",
-        id: args.blockId,
-        note_id: args.noteId,
+        id: validatedArgs.blockId,
+        note_id: validatedArgs.noteId,
         user_id: userId as UserId,
-        type: args.type,
-        content: args.content || "",
-        fields: args.fields || {},
+        type: validatedArgs.type,
+        content: validatedArgs.content || "",
+        fields: fields,
         order: nextOrder,
         depth: 0,
         version: 1,
@@ -79,12 +85,15 @@ export const createBlock = async (
         transclusions: [],
         file_path: "",
         parent_id: null,
-        // ✅ Persist Geo
-        latitude: args.latitude,
-        longitude: args.longitude,
+        latitude: validatedArgs.latitude,
+        longitude: validatedArgs.longitude,
+        // Convert Date object to ISO string for storage if present
+        device_created_at: validatedArgs.deviceCreatedAt instanceof Date 
+            ? validatedArgs.deviceCreatedAt.toISOString() 
+            : validatedArgs.deviceCreatedAt,
     };
 
-    await tx.set(`block/${args.blockId}`, newBlock as unknown as ReadonlyJSONValue);
+    await tx.set(`block/${validatedArgs.blockId}`, newBlock as unknown as ReadonlyJSONValue);
 };
 
 export const updateTask = async (

@@ -76,7 +76,8 @@ describe("Note Mutations (Integration)", () => {
                     noteId,
                     blockId: block1Id,
                     type: "tiptap_text",
-                    content: "Block 1"
+                    content: "Block 1",
+                    fields: { key: "foo", value: "bar" } // ✅ Strict Text Args
                 }, userId);
 
                 // 3. Add Block 2
@@ -84,7 +85,7 @@ describe("Note Mutations (Integration)", () => {
                     noteId,
                     blockId: block2Id,
                     type: "form_checklist",
-                    fields: { items: [] }
+                    fields: { items: [] } // ✅ Strict Checklist Args
                 }, userId);
 
                 // 4. Verify Order
@@ -128,7 +129,8 @@ describe("Note Mutations (Integration)", () => {
                     noteId,
                     blockId,
                     type: "form_meter",
-                    fields: { value: 50 },
+                    // ✅ Strict Meter Args
+                    fields: { value: 50, min: 0, max: 100, label: "Pressure", unit: "psi" },
                     latitude: -33.8688,
                     longitude: 151.2093
                 }, userId);
@@ -147,7 +149,7 @@ describe("Note Mutations (Integration)", () => {
         );
     });
 
-    // ✅ NEW TEST: Verify Alert Propagation (Fixed await)
+    // Verify Alert Propagation
     it("should propagate 'due_at' field from Block JSON to Task Table", async () => {
         await Effect.runPromise(
             Effect.gen(function* () {
@@ -166,12 +168,12 @@ describe("Note Mutations (Integration)", () => {
                 yield* handleCreateBlock(db, {
                     noteId,
                     blockId,
-                    type: "task", // Now valid via schema update
-                    fields: { status: "todo", is_complete: false },
+                    type: "task", 
+                    // ✅ Strict Task Args
+                    fields: { status: "todo", is_complete: false, due_at: undefined },
                 }, userId);
 
                 // 2. Ensure Task Record exists
-                // ✅ FIX: Wrapped in Effect.promise
                 yield* Effect.promise(() => db.insertInto("task")
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     .values({

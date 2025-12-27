@@ -1,12 +1,17 @@
 // FILE: src/features/note/mutations/block.ts
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
 import { NoteDatabaseError, VersionConflictError } from "../Errors";
 import { getNextGlobalVersion } from "../../replicache/versioning";
 import { logBlockHistory, markHistoryRejected } from "../history.utils";
 import { updateBlockInContent, revertBlockInContent } from "../utils/content-traversal";
-import type { UpdateBlockArgsSchema, RevertBlockArgsSchema, CreateBlockArgsSchema, IncrementCounterArgsSchema } from "../note.schemas";
+import { 
+    UpdateBlockArgsSchema, 
+    RevertBlockArgsSchema, 
+    CreateBlockArgsSchema, 
+    IncrementCounterArgsSchema 
+} from "../note.schemas";
 import type { UserId } from "../../../lib/shared/schemas";
 
 interface ContentNode {
@@ -22,7 +27,7 @@ interface ContentNode {
 
 export const handleCreateBlock = (
     db: Kysely<Database> | Transaction<Database>,
-    args: typeof CreateBlockArgsSchema.Type,
+    args: Schema.Schema.Type<typeof CreateBlockArgsSchema>,
     userId: UserId,
 ) =>
     Effect.gen(function* () {
@@ -42,6 +47,7 @@ export const handleCreateBlock = (
         const nextOrder = (maxOrderRow?.maxOrder ?? 0) + 1;
 
         // 2. Insert Block
+        // We strictly explicitly map fields to ensure type safety without 'as any'
         yield* Effect.tryPromise({
             try: () =>
                 db.insertInto("block")
@@ -50,8 +56,9 @@ export const handleCreateBlock = (
                         note_id: args.noteId,
                         user_id: userId,
                         type: args.type,
-                        content: args.content || "",
-                        fields: args.fields || {},
+                        content: args.content ?? "",
+                        // Serialize fields to JSON for storage
+                        fields: JSON.stringify(args.fields || {}),
                         order: nextOrder,
                         depth: 0,
                         file_path: "",
@@ -62,9 +69,12 @@ export const handleCreateBlock = (
                         created_at: sql<Date>`now()`,
                         updated_at: sql<Date>`now()`,
                         global_version: String(globalVersion),
-                        // ✅ Capture Geolocation from args
+                        // ✅ Typed Geo Fields
                         latitude: args.latitude ?? null,
                         longitude: args.longitude ?? null,
+                        // ✅ Typed Audit Field
+                        device_created_at: args.deviceCreatedAt ?? null,
+                        parent_id: null
                     })
                     .execute(),
             catch: (cause) => new NoteDatabaseError({ cause }),
@@ -82,7 +92,7 @@ export const handleCreateBlock = (
 
 export const handleUpdateBlock = (
     db: Kysely<Database> | Transaction<Database>,
-    args: typeof UpdateBlockArgsSchema.Type,
+    args: Schema.Schema.Type<typeof UpdateBlockArgsSchema>,
     userId: UserId,
 ) =>
     Effect.gen(function* () {
@@ -154,7 +164,7 @@ export const handleUpdateBlock = (
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
 
-        // ✅ NEW: Propagate due_at to task table for alerting
+        // ✅ Propagate due_at to task table for alerting
         if (args.fields && 'due_at' in args.fields) {
             yield* Effect.tryPromise({
                 try: () =>
@@ -170,7 +180,7 @@ export const handleUpdateBlock = (
 
 export const handleRevertBlock = (
     db: Kysely<Database> | Transaction<Database>,
-    args: typeof RevertBlockArgsSchema.Type,
+    args: Schema.Schema.Type<typeof RevertBlockArgsSchema>,
     userId: UserId
 ) =>
     Effect.gen(function* () {
@@ -239,7 +249,7 @@ export const handleRevertBlock = (
 
 export const handleIncrementCounter = (
     db: Kysely<Database> | Transaction<Database>,
-    args: typeof IncrementCounterArgsSchema.Type,
+    args: Schema.Schema.Type<typeof IncrementCounterArgsSchema>,
     userId: UserId,
 ) =>
     Effect.gen(function* () {

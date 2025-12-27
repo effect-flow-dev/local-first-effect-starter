@@ -1,5 +1,6 @@
 // FILE: src/features/replicache/push.ts
 import { Effect, Schema } from "effect";
+import { TreeFormatter, type ParseError } from "effect/ParseResult";
 import { sql, type Kysely } from "kysely";
 import type { Database } from "../../types";
 import { poke } from "../../lib/server/PokeService";
@@ -16,7 +17,7 @@ import {
   handleRevertBlock,
   handleRevertNote,
   handleCreateBlock,
-  handleIncrementCounter, // ✅ Import handler
+  handleIncrementCounter,
   RevertBlockArgsSchema,
   RevertNoteArgsSchema,
   CreateNoteArgsSchema,
@@ -25,7 +26,7 @@ import {
   UpdateTaskArgsSchema,
   UpdateBlockArgsSchema,
   CreateBlockArgsSchema,
-  IncrementCounterArgsSchema, // ✅ Import schema
+  IncrementCounterArgsSchema,
 } from "../note/note.mutations";
 import {
   handleCreateNotebook,
@@ -97,7 +98,17 @@ const MUTATION_PERMISSIONS: Record<string, Permission> = {
     deleteNotebook: PERMISSIONS.NOTEBOOK_DELETE,
     revertBlock: PERMISSIONS.BLOCK_EDIT,
     revertNote: PERMISSIONS.NOTE_EDIT,
-    incrementCounter: PERMISSIONS.BLOCK_EDIT, // ✅ Permission mapping
+    incrementCounter: PERMISSIONS.BLOCK_EDIT,
+};
+
+// Check if an error is a Schema ParseError
+const isParseError = (error: unknown): error is ParseError => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    '_tag' in error &&
+    (error as { _tag: unknown })._tag === 'ParseError'
+  );
 };
 
 // --- Main Handler ---
@@ -215,6 +226,7 @@ export const handlePush = (
                 const a = yield* Schema.decodeUnknown(UpdateBlockArgsSchema)(args);
                 yield* handleUpdateBlock(trx, a, user.id);
               } else if (name === "createBlock") { 
+                // ✅ STRICT VALIDATION: Using Discriminated Union Schema
                 const a = yield* Schema.decodeUnknown(CreateBlockArgsSchema)(args);
                 yield* handleCreateBlock(trx, a, user.id);
               } else if (name === "createNotebook") {
@@ -230,7 +242,6 @@ export const handlePush = (
                 const a = yield* Schema.decodeUnknown(RevertNoteArgsSchema)(args);
                 yield* handleRevertNote(trx, a, user.id);
               } else if (name === "incrementCounter") {
-                // ✅ Handle atomic increment
                 const a = yield* Schema.decodeUnknown(IncrementCounterArgsSchema)(args);
                 yield* handleIncrementCounter(trx, a, user.id);
               }
@@ -240,7 +251,7 @@ export const handlePush = (
             // We must NOT let a single mutation failure abort the entire push transaction.
             try {
                 await Effect.runPromise(effectToRun);
-            } catch (err) {
+            } catch (err: unknown) {
                 // Handle Specific Logic Errors (e.g. Conflicts)
                 if (err instanceof VersionConflictError) {
                     console.warn(`[Push] Version Conflict detected for ${name}. Injecting alert...`);
@@ -282,7 +293,6 @@ export const handlePush = (
 
                         const content = JSON.parse(JSON.stringify(noteRow.content)) as GenericTiptapNode;
                         if (injectConflictAlert(content, err.blockId, message)) {
-                             // ✅ FIX: Use Effect.tryPromise + sql.execute inside generator (No await!)
                              const res = yield* Effect.tryPromise({
                                  try: async () => {
                                      const result = await sql<{ nextval: string }>`select nextval('global_version_seq')`.execute(trx);
@@ -309,8 +319,15 @@ export const handlePush = (
                         Effect.catchAll(e => Effect.logError("Conflict resolution failed", e))
                     ));
 
+                } else if (isParseError(err)) {
+                    // ✅ Specific logging for Schema Validation Errors
+                    console.error(`[Push] Schema Validation Failed for ${name}:`, Effect.runSync(TreeFormatter.formatError(err)));
+                } else if (err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === '(FiberFailure) ParseError') {
+                    // ✅ Catch FiberFailure wrapping ParseError
+                    // This happens when Effect.runPromise catches a Schema decode failure from inside the effect
+                    console.error(`[Push] Schema Validation Failed for ${name} (FiberFailure):`, JSON.stringify(err, null, 2));
                 } else {
-                    // "Poison Pill" Case: Schema validation failed, or unknown bug.
+                    // "Poison Pill" Case: Unknown bug.
                     console.error(`[Push] Poison Pill caught! Mutation ${name} (ID: ${mutationID}) failed. Consuming error to unblock queue.`, err);
                 }
             }

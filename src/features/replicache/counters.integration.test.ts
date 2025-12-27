@@ -59,16 +59,17 @@ describe("Counters & Atomic Increments (Integration)", () => {
 
         // 1. Setup: Create Note & Block with initial value 0
         yield* handleCreateNote(db, {
-          id: noteId,
-          userID: userId,
-          title: "Counter Test",
+            id: noteId,
+            userID: userId,
+            title: "Counter Test",
         });
 
         yield* handleCreateBlock(db, {
-          noteId,
-          blockId,
-          type: "form_meter",
-          fields: { value: 0 },
+            noteId,
+            blockId,
+            type: "form_meter",
+            // ✅ Strict Meter Args
+            fields: { value: 0, min: 0, max: 100, label: "Counter", unit: "count" },
         }, userId);
 
         // Verify initial state
@@ -79,7 +80,6 @@ describe("Counters & Atomic Increments (Integration)", () => {
         expect(initialBlock.fields.value).toBe(0);
 
         // 2. Simulate User A: Pushes "Add 5"
-        // This simulates the client calculating 0 + 5 = 5, but sending delta: 5
         const pushA: PushRequest = {
           clientGroupID: "client-group-a",
           mutations: [
@@ -98,21 +98,18 @@ describe("Counters & Atomic Increments (Integration)", () => {
         };
 
         // 3. Simulate User B: Pushes "Add 5" concurrently
-        // User B also sees value 0 locally (base version 1), adds 5.
-        // If this were "updateBlock" setting value=5, the final result would be 5 (LWW).
-        // Since it's "incrementCounter" delta=5, the final result should be 10.
         const pushB: PushRequest = {
           clientGroupID: "client-group-b",
           mutations: [
             {
-              id: 1, // First mutation for this client
+              id: 1, 
               clientID: "client-b",
               name: "incrementCounter",
               args: {
                 blockId,
                 key: "value",
                 delta: 5,
-                version: 1, // Same base version as User A saw!
+                version: 1, 
               },
             },
           ],
@@ -121,7 +118,6 @@ describe("Counters & Atomic Increments (Integration)", () => {
         // Execute A
         yield* handlePush(pushA, { ...mockUser, id: userId }, db, "OWNER");
 
-        // Intermediate verification (optional)
         const blockAfterA = yield* Effect.promise(() =>
             db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
         );
@@ -155,7 +151,8 @@ describe("Counters & Atomic Increments (Integration)", () => {
           noteId,
           blockId,
           type: "form_meter",
-          fields: { value: 20 },
+          // ✅ Strict Meter Args
+          fields: { value: 20, min: 0, max: 100, label: "Test", unit: "pts" },
         }, userId);
 
         // 2. Push Decrement (-5)

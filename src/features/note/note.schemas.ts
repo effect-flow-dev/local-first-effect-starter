@@ -6,8 +6,13 @@ import {
   BlockIdSchema,
   TiptapDocSchema,
   NotebookIdSchema,
-  LenientDateSchema, 
+  LenientDateSchema,
+  LatitudeSchema,
+  LongitudeSchema,
 } from "../../lib/shared/schemas";
+
+// Re-export the one from shared for backward compat if needed, or consumers should switch
+export { CreateBlockArgsSchema } from "../../lib/shared/schemas";
 
 export const TemplateItemSchema = Schema.Struct({
   type: Schema.Union(
@@ -15,8 +20,8 @@ export const TemplateItemSchema = Schema.Struct({
       Schema.Literal("form_checklist"),
       Schema.Literal("form_meter"),
       Schema.Literal("map_block"),
-      Schema.Literal("task"),  // ✅ Added
-      Schema.Literal("image")  // ✅ Added
+      Schema.Literal("task"),  
+      Schema.Literal("image")  
   ),
   fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   content: Schema.optional(Schema.String)
@@ -30,8 +35,8 @@ export const CreateNoteArgsSchema = Schema.Struct({
   notebookId: Schema.optional(NotebookIdSchema),
   template: Schema.optional(Schema.Array(TemplateItemSchema)),
   deviceCreatedAt: Schema.optional(LenientDateSchema), 
-  latitude: Schema.optional(Schema.Number),
-  longitude: Schema.optional(Schema.Number),
+  latitude: Schema.optional(LatitudeSchema),
+  longitude: Schema.optional(LongitudeSchema),
 });
 
 export const UpdateNoteArgsSchema = Schema.Struct({
@@ -45,23 +50,7 @@ export const DeleteNoteArgsSchema = Schema.Struct({
   id: NoteIdSchema,
 });
 
-export const CreateBlockArgsSchema = Schema.Struct({
-  noteId: NoteIdSchema,
-  blockId: BlockIdSchema,
-  type: Schema.Union(
-      Schema.Literal("tiptap_text"),
-      Schema.Literal("form_checklist"),
-      Schema.Literal("form_meter"),
-      Schema.Literal("map_block"),
-      Schema.Literal("task"),  // ✅ Added
-      Schema.Literal("image")  // ✅ Added
-  ),
-  content: Schema.optional(Schema.String),
-  fields: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-  deviceCreatedAt: Schema.optional(LenientDateSchema),
-  latitude: Schema.optional(Schema.Number),
-  longitude: Schema.optional(Schema.Number),
-});
+// CreateBlockArgsSchema MOVED TO SHARED
 
 export const UpdateTaskArgsSchema = Schema.Struct({
   blockId: BlockIdSchema,

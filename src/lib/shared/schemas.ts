@@ -41,6 +41,61 @@ export const BlockHistoryIdSchema: Schema.Schema<BlockHistoryId, string, never> 
 export const ConsultancyIdSchema = UUIDSchemaBase.pipe(Schema.annotations({ identifier: "ConsultancyId" }));
 export const TenantIdSchema = UUIDSchemaBase.pipe(Schema.annotations({ identifier: "TenantId" }));
 
+// --- Precise Domain Schemas ---
+
+export const LatitudeSchema = Schema.Number.pipe(
+  Schema.between(-90, 90),
+  Schema.annotations({ 
+    identifier: "Latitude", 
+    message: () => "Invalid Latitude: must be between -90 and 90." 
+  })
+);
+
+export const LongitudeSchema = Schema.Number.pipe(
+  Schema.between(-180, 180),
+  Schema.annotations({ 
+    identifier: "Longitude", 
+    message: () => "Invalid Longitude: must be between -180 and 180." 
+  })
+);
+
+export const GeoLocationSchema = Schema.Struct({
+  latitude: LatitudeSchema,
+  longitude: LongitudeSchema,
+});
+
+export const LenientDateSchema = Schema.Union(
+  Schema.DateFromSelf,
+  Schema.DateFromString,
+);
+
+export const DeviceAuditSchema = Schema.Struct({
+  device_created_at: LenientDateSchema,
+});
+
+export const ChecklistItemSchema = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  checked: Schema.Boolean,
+});
+
+export const ChecklistFieldsSchema = Schema.Struct({
+  items: Schema.Array(ChecklistItemSchema),
+});
+
+export const MeterFieldsSchema = Schema.Struct({
+  label: Schema.String,
+  value: Schema.Number,
+  min: Schema.Number,
+  max: Schema.Number,
+  unit: Schema.String,
+});
+
+export const MapBlockFieldsSchema = Schema.Struct({
+  zoom: Schema.optional(Schema.Number),
+  style: Schema.optional(Schema.String),
+});
+
 // ... Tiptap Schema Definitions ...
 const TagMarkSchema = Schema.Struct({
   type: Schema.Literal("tagMark"),
@@ -164,7 +219,6 @@ const InteractiveBlockSchema = Schema.Struct({
     fields: Schema.Struct({
       is_complete: Schema.optional(Schema.Boolean), 
       status: Schema.optional(TaskStatusSchema), 
-      // ✅ NEW: Add due_at field for alerts
       due_at: Schema.optional(Schema.String),
       url: Schema.optional(Schema.NullOr(Schema.String)),
       uploadId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -230,11 +284,6 @@ const ContentSchema = Schema.transform(Schema.Unknown, TiptapDocSchema, {
   decode: (u) => Schema.decodeUnknownSync(TiptapDocSchema)(u),
   encode: (t) => t,
 });
-
-export const LenientDateSchema = Schema.Union(
-  Schema.DateFromSelf,
-  Schema.DateFromString,
-);
 
 export const NotebookSchema = Schema.Struct({
   id: NotebookIdSchema,
@@ -350,29 +399,6 @@ export const TenantMembershipSchema = Schema.Struct({
 
 // --- Phase 2: Hybrid Architecture Schemas ---
 
-export const ChecklistItemSchema = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  checked: Schema.Boolean,
-});
-
-export const ChecklistFieldsSchema = Schema.Struct({
-  items: Schema.Array(ChecklistItemSchema),
-});
-
-export const MeterFieldsSchema = Schema.Struct({
-  label: Schema.String,
-  value: Schema.Number,
-  min: Schema.Number,
-  max: Schema.Number,
-  unit: Schema.String,
-});
-
-export const MapBlockFieldsSchema = Schema.Struct({
-  zoom: Schema.optional(Schema.Number),
-  style: Schema.optional(Schema.String),
-});
-
 // Base structure for all blocks
 const BlockBase = {
   id: BlockIdSchema,
@@ -390,8 +416,9 @@ const BlockBase = {
   created_at: LenientDateSchema,
   updated_at: LenientDateSchema,
   global_version: Schema.optional(Schema.String),
-  latitude: Schema.optional(Schema.Number),
-  longitude: Schema.optional(Schema.Number),
+  latitude: Schema.optional(LatitudeSchema),
+  longitude: Schema.optional(LongitudeSchema),
+  device_created_at: Schema.optional(LenientDateSchema),
 };
 
 export const TiptapTextBlockSchema = Schema.Struct({
@@ -438,3 +465,68 @@ export type TiptapTextBlock = Schema.Schema.Type<typeof TiptapTextBlockSchema>;
 export type FormChecklistBlock = Schema.Schema.Type<typeof FormChecklistBlockSchema>;
 export type FormMeterBlock = Schema.Schema.Type<typeof FormMeterBlockSchema>;
 export type MapBlock = Schema.Schema.Type<typeof MapBlockSchema>;
+
+// --- Discriminated Union for Block Creation (Mutation Args) ---
+
+const CreateBlockBase = {
+  noteId: NoteIdSchema,
+  blockId: BlockIdSchema,
+  deviceCreatedAt: Schema.optional(LenientDateSchema),
+  latitude: Schema.optional(LatitudeSchema),
+  longitude: Schema.optional(LongitudeSchema),
+  content: Schema.optional(Schema.String),
+};
+
+const CreateChecklistBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("form_checklist"),
+  fields: ChecklistFieldsSchema,
+});
+
+const CreateMeterBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("form_meter"),
+  fields: MeterFieldsSchema,
+});
+
+const CreateMapBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("map_block"),
+  fields: MapBlockFieldsSchema,
+});
+
+const CreateTaskBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("task"),
+  fields: Schema.Struct({
+    is_complete: Schema.optional(Schema.Boolean),
+    status: Schema.optional(TaskStatusSchema),
+    due_at: Schema.optional(Schema.String),
+  }),
+});
+
+const CreateImageBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("image"),
+  fields: Schema.Struct({
+    url: Schema.optional(Schema.NullOr(Schema.String)),
+    uploadId: Schema.optional(Schema.NullOr(Schema.String)),
+    width: Schema.optional(Schema.Number),
+    caption: Schema.optional(Schema.String),
+  }),
+});
+
+const CreateTiptapTextBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("tiptap_text"),
+  fields: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+});
+
+export const CreateBlockArgsSchema = Schema.Union(
+  CreateChecklistBlockArgs,
+  CreateMeterBlockArgs,
+  CreateMapBlockArgs,
+  CreateTaskBlockArgs,
+  CreateImageBlockArgs,
+  CreateTiptapTextBlockArgs
+);

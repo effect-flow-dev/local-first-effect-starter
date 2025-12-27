@@ -10,18 +10,45 @@ import { infraRoutes } from "./routes/infra";
 import { mediaRoutes } from "./routes/media";
 import { logRoutes } from "./routes/log";
 import { noteRoutes } from "./routes/note";
-import { pushRoutes } from "./routes/push"; // ✅ Step 5: Import Push Routes
-import { subscribe } from "../lib/server/PokeService";
+import { pushRoutes } from "./routes/push"; 
+import { subscribe, broadcastPresence } from "../lib/server/PokeService";
 import { validateToken } from "../lib/server/JwtService";
 import { Effect, Stream } from "effect";
 import { effectPlugin } from "./middleware/effect-plugin";
-import { alertWorkerLive } from "../features/alerts/alert.worker"; // ✅ Step 6: Import Worker
-import { serverRuntime } from "../lib/server/server-runtime"; // ✅ Step 6: Import Runtime
+import { alertWorkerLive } from "../features/alerts/alert.worker"; 
+import { serverRuntime } from "../lib/server/server-runtime";
+import { centralDb } from "../db/client";
+import { config } from "../lib/server/Config";
+import type { PublicUser } from "../lib/shared/schemas";
 
-// ✅ Step 6: Start Background Alert Worker
-// We use the serverRuntime to ensure telemetry/logging context is maintained
+// Start Background Alert Worker
 serverRuntime.runFork(alertWorkerLive);
 console.info("🚀 Background Alert Worker started.");
+
+// --- Types for WebSocket Context & Messages ---
+
+interface WsContext {
+  user: PublicUser;
+  tenantId: string | null;
+}
+
+interface FocusMessage {
+  type: "focus";
+  blockId: string;
+}
+
+interface TenantLookupResult {
+  id: string;
+}
+
+const isFocusMessage = (msg: unknown): msg is FocusMessage => {
+  return (
+    typeof msg === "object" &&
+    msg !== null &&
+    (msg as Record<string, unknown>).type === "focus" &&
+    typeof (msg as Record<string, unknown>).blockId === "string"
+  );
+};
 
 const app = new Elysia()
   .onError(({ code, error, request }) => {
@@ -51,13 +78,10 @@ const app = new Elysia()
   .use(mediaRoutes)
   .use(logRoutes)
   .use(noteRoutes)
-  .use(pushRoutes) // ✅ Step 5: Register Push Routes
+  .use(pushRoutes)
   .ws("/ws", {
     async open(ws) {
-      const protocolHeader = ws.data.request.headers.get(
-        "sec-websocket-protocol",
-      );
-
+      const protocolHeader = ws.data.request.headers.get("sec-websocket-protocol");
       let token: string | undefined;
 
       if (protocolHeader) {
@@ -82,9 +106,43 @@ const app = new Elysia()
       }
 
       const user = result.right;
-      console.log(`[Server WS] Connected: ${user.id}`);
 
-      const stream = subscribe(user.id);
+      // --- Resolve Tenant Context ---
+      let tenantId: string | null = null;
+      const host = ws.data.request.headers.get("host") || "";
+      const headerSubdomain = ws.data.request.headers.get("x-life-io-subdomain");
+      
+      const rootDomain = config.app.rootDomain;
+      let requestedSubdomain: string | null = null;
+
+      if (headerSubdomain) {
+        requestedSubdomain = headerSubdomain;
+      } else if (host.endsWith(`.${rootDomain}`)) {
+        requestedSubdomain = host.slice(0, -(rootDomain.length + 1));
+      }
+
+      if (requestedSubdomain) {
+        const tenant = await centralDb
+          .withSchema("public")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .selectFrom("tenant" as any)
+          .select("id")
+          .where("subdomain", "=", requestedSubdomain)
+          .executeTakeFirst();
+        
+        if (tenant) {
+            // Explicitly cast to internal type to satisfy linter
+            tenantId = (tenant as unknown as TenantLookupResult).id;
+        }
+      }
+      
+      console.log(`[Server WS] Connected: ${user.id} (Tenant: ${tenantId || "Global"})`);
+
+      // Subscribe User & Register Session
+      const stream = subscribe(user.id, tenantId);
+
+      // Store typed context
+      ws.data.store = { user, tenantId };
 
       Effect.runFork(
         Stream.runForEach(stream, (msg) => {
@@ -93,7 +151,33 @@ const app = new Elysia()
         }),
       );
     },
-    message(_ws, _message) {},
+    
+    async message(ws, message) {
+        try {
+            // Cast to WsContext to ensure safety when accessing user/tenantId
+            const ctx = ws.data.store as WsContext;
+            if (!ctx || !ctx.tenantId) return;
+
+            // ✅ FIX: Cast result to unknown to prevent 'any' assignment error
+            const rawPayload = (typeof message === 'string' ? JSON.parse(message) : message) as unknown;
+            
+            if (isFocusMessage(rawPayload)) {
+                // Broadcast 'presence' event to everyone in this tenant
+                const presenceMsg = {
+                    type: 'presence',
+                    userId: ctx.user.id,
+                    blockId: rawPayload.blockId,
+                    timestamp: Date.now()
+                };
+                
+                await Effect.runPromise(
+                    broadcastPresence(ctx.tenantId, presenceMsg)
+                );
+            }
+        } catch (e) {
+            console.error("[Server WS] Failed to handle message", e);
+        }
+    },
   })
   .use(
     staticPlugin({

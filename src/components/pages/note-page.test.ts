@@ -1,0 +1,222 @@
+// FILE: src/components/pages/note-page.test.ts
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
+import { NotesPage } from "./notes-page";
+import { NotePage } from "./note-page"; // Import NotePage specifically
+import { noteListState } from "../../lib/client/stores/noteListStore";
+import { NoteDeletionError } from "../../lib/client/errors";
+import type { AppNoteMetadata, NoteId, UserId } from "../../lib/shared/schemas";
+
+// --- Mocks & Constants ---
+const MOCK_NOTE_ID = "00000000-0000-0000-0000-000000000001" as NoteId;
+const MOCK_USER_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" as UserId;
+
+const MOCK_NOTE: AppNoteMetadata = {
+  id: MOCK_NOTE_ID,
+  user_id: MOCK_USER_ID,
+  title: "Test Note",
+  updated_at: new Date(),
+} as any;
+
+const { mockDeleteNote, mockEffect, mockSendFocus } = vi.hoisted(() => ({
+  mockDeleteNote: vi.fn(() => Promise.resolve()),
+  mockEffect: vi.fn(),
+  mockSendFocus: vi.fn(),
+}));
+
+vi.mock("@preact/signals-core", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@preact/signals-core")>();
+  return {
+    ...original,
+    effect: mockEffect,
+  };
+});
+
+// ✅ NEW: Mock WebSocket Service
+vi.mock("../../lib/client/replicache/websocket", () => ({
+  sendFocus: mockSendFocus
+}));
+
+// --- Runtime Mock (Existing) ---
+vi.mock("../../lib/client/runtime", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../../lib/client/runtime")>();
+    const { Runtime, Effect, Layer } = await import("effect");
+    
+    const { ReplicacheService } = await vi.importActual<typeof import("../../lib/client/replicache")>("../../lib/client/replicache");
+    const { LocationService } = await vi.importActual<typeof import("../../lib/client/LocationService")>("../../lib/client/LocationService");
+    
+    const LocationServiceTestLive = Layer.succeed(LocationService, LocationService.of({ navigate: () => Effect.void, pathname: Effect.void } as any));
+    const ReplicacheServiceTestLive = Layer.succeed(ReplicacheService, ReplicacheService.of({
+      client: { mutate: { deleteNote: mockDeleteNote } },
+    } as any));
+
+    const TestLayers = Layer.mergeAll(
+        LocationServiceTestLive,
+        ReplicacheServiceTestLive
+    );
+
+    const testRuntime = Effect.runSync(
+        Layer.toRuntime(TestLayers).pipe(Effect.scoped)
+    );
+    
+    return {
+        ...original,
+        runClientUnscoped: (effect: any) => Runtime.runFork(testRuntime)(effect),
+    };
+});
+
+// Mock Dependencies for NotePage render
+vi.mock("../editor/tiptap-editor", () => ({ TiptapEditor: class {} }));
+vi.mock("../blocks/smart-checklist", () => ({ SmartChecklist: class {} }));
+vi.mock("../ui/presence-indicator", () => ({ PresenceIndicator: class {} }));
+
+describe("NotesPage Component (Delete Flow)", () => {
+  // ... (Existing Tests kept as is) ...
+  let notesPage: NotesPage;
+
+  beforeAll(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn();
+    HTMLDialogElement.prototype.close = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    noteListState.value = [MOCK_NOTE];
+    
+    mockEffect.mockImplementation((fn) => {
+      fn(); 
+      return vi.fn(); 
+    });
+
+    if (!customElements.get("notes-page")) {
+        customElements.define("notes-page", NotesPage);
+    }
+    notesPage = new NotesPage();
+    document.body.appendChild(notesPage);
+  });
+
+  afterEach(() => {
+    if (notesPage && notesPage.parentNode) {
+      document.body.removeChild(notesPage);
+    }
+  });
+  
+  it("state: REQUEST_DELETE_NOTE sets the interaction to confirming_delete", async () => {
+    notesPage.dispatch({ type: "REQUEST_DELETE_NOTE", payload: MOCK_NOTE_ID });
+    await notesPage.updateComplete;
+    
+    const state = notesPage.state.value;
+    if (state.status !== "ready") throw new Error("State should be ready");
+    
+    expect(state.interaction).toEqual({ type: "confirming_delete", noteId: MOCK_NOTE_ID });
+    expect(state.error).toBeNull();
+  });
+
+  it("state: CANCEL_DELETE_NOTE resets interaction to idle", async () => {
+    notesPage.dispatch({ type: "REQUEST_DELETE_NOTE", payload: MOCK_NOTE_ID });
+    await notesPage.updateComplete;
+    
+    notesPage.dispatch({ type: "CANCEL_DELETE_NOTE" });
+    await notesPage.updateComplete;
+    
+    const state = notesPage.state.value;
+    if (state.status !== "ready") throw new Error("State should be ready");
+    
+    expect(state.interaction).toEqual({ type: "idle" });
+  });
+
+  it("flow: CONFIRM_DELETE_NOTE executes deletion", async () => {
+    notesPage.dispatch({ type: "REQUEST_DELETE_NOTE", payload: MOCK_NOTE_ID });
+    await notesPage.updateComplete;
+    
+    // Simulate user confirming
+    notesPage.dispatch({ type: "CONFIRM_DELETE_NOTE" });
+    
+    // The state should now be 'deleting'
+    let state = notesPage.state.value;
+    if (state.status !== "ready") throw new Error("State should be ready");
+    expect(state.interaction).toEqual({ type: "deleting", noteId: MOCK_NOTE_ID });
+
+    // Wait for async effect (mockDeleteNote)
+    await vi.waitUntil(() => mockDeleteNote.mock.calls.length > 0);
+    expect(mockDeleteNote).toHaveBeenCalledWith({ id: MOCK_NOTE_ID });
+    
+    // Wait for the completion dispatch
+    await vi.waitUntil(() => {
+        const s = notesPage.state.value;
+        return s.status === "ready" && s.interaction.type === "idle";
+    });
+  });
+  
+  it("flow: Deletion failure should dispatch DELETE_NOTE_ERROR", async () => {
+    notesPage.dispatch({ type: "REQUEST_DELETE_NOTE", payload: MOCK_NOTE_ID });
+    await notesPage.updateComplete;
+
+    mockDeleteNote.mockImplementationOnce(() => Promise.reject(new Error("DB failed")));
+    
+    notesPage.dispatch({ type: "CONFIRM_DELETE_NOTE" });
+
+    // Wait for error state
+    await vi.waitUntil(() => {
+        const s = notesPage.state.value;
+        return s.status === "ready" && s.error instanceof NoteDeletionError;
+    });
+
+    const state = notesPage.state.value;
+    if (state.status !== "ready") throw new Error("State should be ready");
+    
+    expect(state.interaction).toEqual({ type: "idle" }); // Error resets interaction to idle usually
+    expect(state.error).toBeInstanceOf(NoteDeletionError);
+  });
+});
+
+// ✅ NEW: Presence Integration Test
+describe("NotePage Component (Presence)", () => {
+    let notePage: NotePage;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.useFakeTimers();
+
+        if (!customElements.get("note-page")) {
+            customElements.define("note-page", NotePage);
+        }
+        notePage = new NotePage();
+        notePage.id = MOCK_NOTE_ID;
+        
+        // Mock state to render blocks
+        notePage.state.value = {
+            status: "ready",
+            note: { ...MOCK_NOTE, content: { type: "doc" } } as any,
+            blocks: [
+                { id: "block-1", type: "tiptap_text", content: "" } as any
+            ],
+            isSaving: false,
+            saveError: null,
+            allNoteTitles: new Set(),
+            preview: null,
+            deleteConfirmOpen: false
+        };
+
+        document.body.appendChild(notePage);
+    });
+
+    afterEach(() => {
+        document.body.removeChild(notePage);
+        vi.useRealTimers();
+    });
+
+    it("sends focus event when a block is focused", async () => {
+        await notePage.updateComplete;
+        
+        const blockDiv = notePage.renderRoot.querySelector('[data-block-id="block-1"]');
+        expect(blockDiv).toBeTruthy();
+
+        // Simulate focus bubbling
+        blockDiv?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+        // Fast-forward debounce timer (200ms)
+        vi.advanceTimersByTime(250);
+
+        expect(mockSendFocus).toHaveBeenCalledWith("block-1");
+    });
+});
