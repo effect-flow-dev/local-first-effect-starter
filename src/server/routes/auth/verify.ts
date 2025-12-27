@@ -6,7 +6,7 @@ import { centralDb } from "../../../db/client";
 import { generateToken } from "../../../lib/server/JwtService";
 import { effectPlugin } from "../../middleware/effect-plugin";
 import { handleAuthResult } from "./utils";
-import type { EmailVerificationTokenId } from "../../../types/generated/public/EmailVerificationToken";
+import type { EmailVerificationTokenId } from "#src/types/generated/central/public/EmailVerificationToken.js";
 import type { PublicUser } from "../../../lib/shared/schemas";
 import {
   AuthDatabaseError,

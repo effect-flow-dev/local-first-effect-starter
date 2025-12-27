@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { handleCreateNote, handleCreateBlock, handleUpdateBlock } from "./note.mutations";
 import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
+import type { TaskId } from "../../../src/types/generated/tenant/tenant_template/Task";
 import { randomUUID } from "node:crypto";
 import type { Database } from "../../types";
 import type { Kysely } from "kysely";
@@ -74,11 +75,11 @@ describe("Note Mutations (Integration)", () => {
                 // 2. Add Block 1
                 yield* handleCreateBlock(db, {
                     noteId,
-                    blockId: block1Id,
+                    blockId: block1Id, // ✅ FIX: Explicitly assign to blockId key
                     type: "tiptap_text",
                     content: "Block 1",
                     fields: { key: "foo", value: "bar" } // ✅ Strict Text Args
-                }, userId);
+                } as any, userId);
 
                 // 3. Add Block 2
                 yield* handleCreateBlock(db, {
@@ -175,16 +176,15 @@ describe("Note Mutations (Integration)", () => {
 
                 // 2. Ensure Task Record exists
                 yield* Effect.promise(() => db.insertInto("task")
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     .values({
-                        id: randomUUID(),
+                        id: randomUUID() as TaskId,
                         user_id: userId,
                         source_block_id: blockId,
                         content: "Task Content",
                         is_complete: false,
                         created_at: new Date(),
                         updated_at: new Date()
-                    } as any)
+                    })
                     .execute()
                 );
 

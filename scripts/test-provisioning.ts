@@ -6,6 +6,8 @@ import { provisionTenant } from "../src/features/auth/auth.service";
 import { getTenantConnection } from "../src/db/connection-manager";
 import { v4 as uuidv4 } from "uuid";
 import type { UserId } from "../src/lib/shared/schemas";
+import type { ConsultancyId } from "../src/types/generated/central/public/Consultancy";
+import type { TenantId } from "../src/types/generated/central/public/Tenant";
 
 const args = Bun.argv.slice(2);
 const strategy = args.includes("--database") ? "database" : "schema";
@@ -15,8 +17,8 @@ const testProvisioning = Effect.gen(function* () {
 
   // 1. Create IDs
   const userId = uuidv4() as UserId;
-  const consultancyId = uuidv4();
-  const tenantId = uuidv4();
+  const consultancyId = uuidv4() as ConsultancyId;
+  const tenantId = uuidv4() as TenantId;
   
   const email = `test.prov.${Date.now()}@example.com`;
   const subdomain = `prov-${Date.now()}`; 
@@ -50,8 +52,7 @@ const testProvisioning = Effect.gen(function* () {
 
   // Consultancy
   yield* Effect.tryPromise(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    centralDb.insertInto("consultancy" as any)
+    centralDb.insertInto("consultancy")
       .values({
           id: consultancyId,
           name: "Test Consultancy",
@@ -62,8 +63,7 @@ const testProvisioning = Effect.gen(function* () {
 
   // Tenant (Configuration lives here now)
   yield* Effect.tryPromise(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    centralDb.insertInto("tenant" as any)
+    centralDb.insertInto("tenant")
       .values({
           id: tenantId,
           consultancy_id: consultancyId,
@@ -79,8 +79,7 @@ const testProvisioning = Effect.gen(function* () {
 
   // Membership
   yield* Effect.tryPromise(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    centralDb.insertInto("tenant_membership" as any)
+    centralDb.insertInto("tenant_membership")
       .values({
           user_id: userId,
           tenant_id: tenantId,
@@ -148,12 +147,9 @@ const testProvisioning = Effect.gen(function* () {
   }
 
   // Cleanup Records
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  yield* Effect.promise(() => centralDb.deleteFrom("tenant_membership" as any).where("user_id", "=", userId).execute());
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  yield* Effect.promise(() => centralDb.deleteFrom("tenant" as any).where("id", "=", tenantId).execute());
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  yield* Effect.promise(() => centralDb.deleteFrom("consultancy" as any).where("id", "=", consultancyId).execute());
+  yield* Effect.promise(() => centralDb.deleteFrom("tenant_membership").where("user_id", "=", userId).execute());
+  yield* Effect.promise(() => centralDb.deleteFrom("tenant").where("id", "=", tenantId).execute());
+  yield* Effect.promise(() => centralDb.deleteFrom("consultancy").where("id", "=", consultancyId).execute());
   yield* Effect.promise(() => centralDb.deleteFrom("user").where("id", "=", userId).execute());
 
   yield* Effect.logInfo("✅ SUCCESS: Provisioning test passed!");

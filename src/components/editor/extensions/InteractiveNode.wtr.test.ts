@@ -5,11 +5,12 @@ import Document from "@tiptap/extension-document";
 import Paragraph from "@tiptap/extension-paragraph";
 import Text from "@tiptap/extension-text";
 import { InteractiveNode } from "./InteractiveNode";
+import type { EditorView } from "@tiptap/pm/view";
+import type { Transaction } from "@tiptap/pm/state";
 
 // Note: We use a regular function here to access 'this.timeout'
 describe("Tiptap Input Rules (Browser)", function () {
-  // ✅ FIX: Increase timeout to 30s to allow for Tiptap + Effect runtime initialization
-  // in the browser test environment, which can be slow in CI/headless modes.
+  // Increase timeout to 30s to allow for Tiptap + Effect runtime initialization
   this.timeout(30000);
 
   let editorElement: HTMLElement;
@@ -48,9 +49,9 @@ describe("Tiptap Input Rules (Browser)", function () {
     // 2. Simulate typing the trigger character (space) using ProseMirror's handleTextInput prop.
     const { view } = editor;
     
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handled = view.someProp("handleTextInput", (f: any) => 
-        f(view, view.state.selection.from, view.state.selection.to, " ")
+    // ✅ FIX: Allow return type to be boolean | void to match ProseMirror's flexible signature types
+    const handled = view.someProp("handleTextInput", (f: (view: EditorView, from: number, to: number, text: string, deflt: () => Transaction) => boolean | void) => 
+        !!f(view, view.state.selection.from, view.state.selection.to, " ", () => null as unknown as Transaction)
     );
 
     expect(handled).to.be.true;
@@ -73,9 +74,10 @@ describe("Tiptap Input Rules (Browser)", function () {
 
     // 2. Simulate typing space
     const { view } = editor;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handled = view.someProp("handleTextInput", (f: any) => 
-        f(view, view.state.selection.from, view.state.selection.to, " ")
+    
+    // ✅ FIX: Allow return type to be boolean | void
+    const handled = view.someProp("handleTextInput", (f: (view: EditorView, from: number, to: number, text: string, deflt: () => Transaction) => boolean | void) => 
+        !!f(view, view.state.selection.from, view.state.selection.to, " ", () => null as unknown as Transaction)
     );
 
     expect(handled).to.be.true;

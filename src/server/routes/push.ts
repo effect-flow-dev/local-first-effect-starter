@@ -5,14 +5,14 @@ import { v4 as uuidv4 } from "uuid";
 import { userContext } from "../context";
 import { effectPlugin } from "../middleware/effect-plugin";
 import { UnauthorizedError } from "../../features/user/Errors";
-// ✅ FIX: Import from the tenant template schema, not public/central
 import type { PushSubscriptionId } from "../../types/generated/tenant/tenant_template/PushSubscription";
 
 export const pushRoutes = new Elysia({ prefix: "/api/push" })
   .use(userContext)
   .use(effectPlugin)
   .post(
-    "/subscribe",
+    // ✅ FIX: Renamed from /subscribe to /subscription to avoid Eden Treaty type collision
+    "/subscription",
     async ({ body, user, userDb, set, runEffect }) => {
       const subscribeEffect = Effect.gen(function* () {
         if (!user || !userDb) {
@@ -27,7 +27,6 @@ export const pushRoutes = new Elysia({ prefix: "/api/push" })
             userDb
               .insertInto("push_subscription")
               .values({
-                // ✅ FIX: Cast string to the Branded Type
                 id: uuidv4() as PushSubscriptionId,
                 user_id: user.id,
                 endpoint,
@@ -35,7 +34,6 @@ export const pushRoutes = new Elysia({ prefix: "/api/push" })
                 auth: keys.auth,
                 created_at: new Date(), 
               })
-              // ✅ FIX: Allow Kysely to infer types for conflict update
               .onConflict((oc) =>
                 oc.column("endpoint").doUpdateSet({
                   p256dh: keys.p256dh,

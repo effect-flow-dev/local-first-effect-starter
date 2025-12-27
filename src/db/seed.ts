@@ -1,6 +1,8 @@
 // FILE: src/db/seed.ts
 import { PERMISSIONS } from "../lib/shared/permissions";
-import type { UserId } from "../types/generated/public/User";
+import type { UserId } from "../types/generated/central/public/User";
+import type { ConsultancyId } from "../types/generated/central/public/Consultancy";
+import type { TenantId } from "../types/generated/central/public/Tenant";
 import { Argon2id } from "oslo/password";
 import { Effect, Cause, Exit, Data } from "effect";
 import { centralDb, getUserDb, type TenantConfig } from "./client";
@@ -90,11 +92,10 @@ const seedHierarchy = (
     }
 
     // 2. Create Consultancy
-    const consultancyId = uuidv4();
+    const consultancyId = uuidv4() as ConsultancyId;
     yield* Effect.tryPromise({
         try: () => centralDb
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .insertInto("consultancy" as any) 
+            .insertInto("consultancy")
             .values({
                 id: consultancyId,
                 name: `${email.split('@')[0]} Global`,
@@ -104,7 +105,7 @@ const seedHierarchy = (
     });
 
     // 3. Create Tenant
-    const tenantId = uuidv4();
+    const tenantId = uuidv4() as TenantId;
     const emailLocalPart = email.split("@")[0] ?? "user";
     const subdomain = emailLocalPart.toLowerCase().replace(/[^a-z0-9]/g, "-");
     
@@ -118,8 +119,7 @@ const seedHierarchy = (
 
     yield* Effect.tryPromise({
         try: () => centralDb
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .insertInto("tenant" as any)
+            .insertInto("tenant")
             .values({
                 id: tenantId,
                 consultancy_id: consultancyId,
@@ -137,8 +137,7 @@ const seedHierarchy = (
     // 4. Link User to Tenant
     yield* Effect.tryPromise({
         try: () => centralDb
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .insertInto("tenant_membership" as any)
+            .insertInto("tenant_membership")
             .values({
                 user_id: userId,
                 tenant_id: tenantId,
@@ -230,15 +229,11 @@ const seedProgram = Effect.gen(function* () {
   // Clear central tables first to avoid conflicts during re-seed
   // Order matters due to FKs
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    yield* Effect.tryPromise(() => centralDb.deleteFrom("tenant_membership" as any).execute());
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    yield* Effect.tryPromise(() => centralDb.deleteFrom("tenant" as any).execute());
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    yield* Effect.tryPromise(() => centralDb.deleteFrom("consultancy" as any).execute());
+    yield* Effect.tryPromise(() => centralDb.deleteFrom("tenant_membership").execute());
+    yield* Effect.tryPromise(() => centralDb.deleteFrom("tenant").execute());
+    yield* Effect.tryPromise(() => centralDb.deleteFrom("consultancy").execute());
     yield* Effect.tryPromise(() => centralDb.deleteFrom("user").execute());
   } catch {
-    // ✅ FIX: Removed unused variable '_e' from catch block
     yield* Effect.logWarning("Could not clear some tables (might not exist yet or FK issues). Proceeding...");
   }
 

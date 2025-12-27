@@ -6,8 +6,8 @@ import type { Database } from "../../types";
 import { poke } from "../../lib/server/PokeService";
 import type { PushRequest } from "../../lib/shared/replicache-schemas";
 import type { PublicUser, BlockId } from "../../lib/shared/schemas"; 
-import type { ReplicacheClientGroupId } from "../../types/generated/public/ReplicacheClientGroup";
-import type { ReplicacheClientId } from "../../types/generated/public/ReplicacheClient";
+import type { ReplicacheClientGroupId } from "#src/types/generated/tenant/tenant_template/ReplicacheClientGroup.js";
+import type { ReplicacheClientId } from "#src/types/generated/tenant/tenant_template/ReplicacheClient.js";
 import {
   handleCreateNote,
   handleDeleteNote,

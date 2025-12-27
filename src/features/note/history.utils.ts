@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
 import type { NoteId, UserId, BlockId } from "../../lib/shared/schemas";
+import type { BlockHistoryId } from "../../types/generated/tenant/tenant_template/BlockHistory";
 import { NoteDatabaseError } from "./Errors";
 
 // Smart Session Merging Logic
@@ -28,7 +29,7 @@ export const logBlockHistory = (
         .selectFrom("block_history")
         .select(["id", "timestamp"])
         .where("note_id", "=", payload.noteId)
-        .where("block_id", "=", payload.blockId)
+        .where("block_id", "=", payload.blockId as string) // Kysely handles string <-> uuid usually, but explicit cast if needed
         .where("user_id", "=", payload.userId)
         .where("mutation_type", "=", payload.mutationType)
         .orderBy("timestamp", "desc")
@@ -49,8 +50,7 @@ export const logBlockHistory = (
                   content_snapshot: payload.snapshot ? JSON.stringify(payload.snapshot) : null,
                   timestamp: now, // Bump timestamp to keep session alive
               })
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              .where("id", "=", recentEntry.id as any)
+              .where("id", "=", recentEntry.id)
               .execute();
             
             return recentEntry.id;
@@ -58,10 +58,11 @@ export const logBlockHistory = (
       }
 
       // 2. Otherwise, create new entry
+      // block_id column expects UUID, but payload.blockId is branded string.
       const result = await db
         .insertInto("block_history")
         .values({
-          block_id: payload.blockId,
+          block_id: payload.blockId as string,
           note_id: payload.noteId,
           user_id: payload.userId,
           mutation_type: payload.mutationType,
@@ -86,8 +87,8 @@ export const markHistoryRejected = (
       db
         .updateTable("block_history")
         .set({ was_rejected: true })
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .where("id", "=", historyId as any)
+        // Cast string ID to branded ID to satisfy Kysely types
+        .where("id", "=", historyId as BlockHistoryId)
         .execute(),
     catch: (cause) => new NoteDatabaseError({ cause }),
   });

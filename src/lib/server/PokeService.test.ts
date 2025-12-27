@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { Effect, Stream, Fiber } from "effect";
 import { subscribe, tenantSessions } from "./PokeService";
-import type { UserId } from "../../types/generated/public/User";
+import type { UserId } from "../shared/schemas";
 
 const USER_ID = "u1" as UserId;
 const TENANT_ID = "tenant-a";

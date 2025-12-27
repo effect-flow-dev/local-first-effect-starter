@@ -3,13 +3,13 @@ import { Elysia, t } from "elysia";
 import { Effect } from "effect";
 import { centralDb } from "../../db/client";
 import { config } from "../../lib/server/Config";
-import { effectPlugin } from "../middleware/effect-plugin"; // ✅ Import Plugin
+import { effectPlugin } from "../middleware/effect-plugin";
 
 export const infraRoutes = new Elysia({ prefix: "/api/infra" })
-  .use(effectPlugin) // ✅ Enable runEffect
+  .use(effectPlugin)
   .get(
     "/caddy-ask",
-    async ({ query, set, runEffect }) => { // ✅ Destructure runEffect
+    async ({ query, set, runEffect }) => {
       const logic = Effect.gen(function* () {
         // Caddy passes the domain being requested via query param: ?domain=xyz.com
         const { domain } = query;
@@ -42,15 +42,14 @@ export const infraRoutes = new Elysia({ prefix: "/api/infra" })
         // Extract "app" from "app.life-io.xyz"
         const subdomain = domain.slice(0, -rootSuffix.length);
 
-        // Check Central DB
+        // Check Central DB (Tenant Table)
         const exists = yield* Effect.tryPromise(async () => {
-          const user = await centralDb
-            .selectFrom("user")
+          const tenant = await centralDb
+            .selectFrom("tenant")
             .select("id")
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .where("subdomain" as any, "=", subdomain)
+            .where("subdomain", "=", subdomain)
             .executeTakeFirst();
-          return !!user;
+          return !!tenant;
         }).pipe(
           Effect.catchAll(() => Effect.succeed(false)),
         );
@@ -64,7 +63,6 @@ export const infraRoutes = new Elysia({ prefix: "/api/infra" })
         }
       });
 
-      // ✅ Use runEffect to wrap the logic in a span
       return runEffect(logic);
     },
     {

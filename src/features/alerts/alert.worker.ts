@@ -3,6 +3,8 @@ import { Effect, Schedule, pipe } from "effect";
 import { sql } from "kysely";
 import { centralDb, getTenantDb, type TenantConfig } from "../../db/client";
 import { sendPushNotification } from "../../lib/server/push";
+import type { UserId } from "../../lib/shared/schemas";
+import type { TaskId } from "../../types/generated/tenant/tenant_template/Task";
 
 // Temporary interfaces until codegen updates types
 interface TaskWithAlert {
@@ -66,8 +68,7 @@ export const scanAndAlert = Effect.gen(function* () {
               db
                 .selectFrom("push_subscription")
                 .select(["endpoint", "p256dh", "auth"])
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                .where("user_id", "=", t.user_id as any)
+                .where("user_id", "=", t.user_id as UserId)
                 .execute(),
             catch: (e) => new Error(`Failed to fetch subscriptions: ${String(e)}`),
           });
@@ -101,9 +102,7 @@ export const scanAndAlert = Effect.gen(function* () {
                 db
                   .updateTable("task")
                   .set({ alert_sent_at: sql`now()` })
-                  // ✅ FIX: Cast 'id' to any to bypass Kysely's Branded Type check for 'TaskId'
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  .where("id", "=", t.id as any)
+                  .where("id", "=", t.id as TaskId)
                   .execute(),
               catch: (e) => new Error(`Failed to update task ${t.id}: ${String(e)}`),
           });
@@ -113,14 +112,12 @@ export const scanAndAlert = Effect.gen(function* () {
     } catch (err) {
         yield* Effect.logError(`[AlertWorker] Error scanning tenant ${tenant.id}`, err);
     } finally {
-        // If we created a dedicated connection pool for a DB-strategy tenant, close it?
-        // Note: getTenantDb caches connections in connection-manager.ts. 
-        // We typically keep them open on the server.
+        // Connection cleanup if needed
     }
   }
 });
 
-// Run every minute, ensuring the loop continues even if a scan cycle fails
+// Run every minute
 export const alertWorkerLive = pipe(
     scanAndAlert,
     Effect.catchAll(e => Effect.logError("[AlertWorker] Cycle failed", e)),

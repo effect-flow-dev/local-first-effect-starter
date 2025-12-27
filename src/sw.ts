@@ -128,8 +128,7 @@ self.addEventListener("push", (event: PushEvent) => {
 
     if (event.data) {
         try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            data = event.data.json();
+            data = event.data.json() as { title?: string; body?: string; data?: unknown };
         } catch {
             data = { body: event.data.text() };
         }
@@ -137,9 +136,6 @@ self.addEventListener("push", (event: PushEvent) => {
 
     const title = data.title || "Life IO Alert";
 
-    // ✅ FIX: Use strict NotificationOptions type instead of 'any'
-    // and suppress the lint rule for unsafe assignment if data comes from untyped JSON
-     
     const options: NotificationOptions = {
         body: data.body || "You have a new notification",
         icon: "/icon-192.png",
@@ -155,7 +151,6 @@ self.addEventListener("push", (event: PushEvent) => {
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
     event.notification.close();
 
-    // ✅ FIX: Cast 'any' data to a typed object to prevent lint errors
     const data = event.notification.data as { url?: string } | null;
     const urlToOpen = data?.url || "/";
 
@@ -168,24 +163,21 @@ self.addEventListener("notificationclick", (event: NotificationEvent) => {
             });
 
             for (const client of clientList) {
-                // If we found a window, focus it and navigate
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-                if ("focus" in client && typeof (client as any).focus === 'function') {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-                    await (client as any).focus();
-                    
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-                    if ("navigate" in client && typeof (client as any).navigate === 'function') {
-                         // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-                         await (client as any).navigate(urlToOpen);
-                    }
-                    return;
+                // Cast to WindowClient to access focus/navigate methods
+                const windowClient = client;
+
+                if (windowClient.focus) {
+                    await windowClient.focus();
                 }
+
+                if (windowClient.navigate) {
+                    await windowClient.navigate(urlToOpen);
+                }
+                return;
             }
 
             // If no window is open, open a new one
             if (self.clients.openWindow) {
-                 
                 await self.clients.openWindow(urlToOpen);
             }
         })()

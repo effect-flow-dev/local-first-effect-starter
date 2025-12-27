@@ -2,9 +2,9 @@
 import { Data, Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
-import type { UserId } from "../../types/generated/public/User";
+import type { UserId } from "../../types/generated/central/public/User";
+import type { NewTask } from "../../types/generated/tenant/tenant_template/Task";
 import type { NoteId } from "../shared/schemas";
-import type { NewTask } from "../../types/generated/public/Task";
 
 const TASK_REGEX = /^\s*(-\s*)?\[( |x)\]\s+(.*)/i;
 

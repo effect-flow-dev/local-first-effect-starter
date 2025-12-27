@@ -11,7 +11,7 @@ import {
   createPasswordResetToken,
   sendPasswordResetEmail,
 } from "../../../features/auth/auth.service";
-import type { PasswordResetTokenId } from "../../../types/generated/public/PasswordResetToken";
+import type { PasswordResetTokenId } from "#src/types/generated/central/public/PasswordResetToken.js";
 import {
   AuthDatabaseError,
   TokenInvalidError,

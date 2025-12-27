@@ -53,14 +53,13 @@ export const userContext = (app: Elysia) => app.derive(
     
     if (requestedSubdomain) {
       const result = await centralDb
-        .withSchema("public") // ✅ FIX: Force public schema to avoid pollution
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .selectFrom("tenant" as any) 
+        .withSchema("public")
+        .selectFrom("tenant")
         .selectAll()
         .where("subdomain", "=", requestedSubdomain)
         .executeTakeFirst();
       
-      tenant = result as Tenant | undefined;
+      tenant = result;
 
       if (!tenant) {
         set.status = 404;
@@ -72,16 +71,17 @@ export const userContext = (app: Elysia) => app.derive(
     // If on root domain (e.g. 127.0.0.1) and authenticated, but no tenant resolved yet,
     // check if user has exactly ONE membership. If so, auto-contextualize.
     if (!tenant && isRoot && user) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const memberships = await centralDb.withSchema("public").selectFrom("tenant_membership" as any)
+        const memberships = await centralDb
+            .withSchema("public")
+            .selectFrom("tenant_membership")
             .innerJoin("tenant", "tenant.id", "tenant_membership.tenant_id")
             .selectAll("tenant")
             .where("user_id", "=", user.id)
             .execute();
         
         if (memberships.length === 1) {
-            tenant = memberships[0] as Tenant;
-            console.debug(`[Context] Auto-resolved single tenant context: ${tenant.subdomain}`);
+            tenant = memberships[0];
+            console.debug(`[Context] Auto-resolved single tenant context: ${tenant?.subdomain}`);
         }
     }
 
@@ -96,15 +96,14 @@ export const userContext = (app: Elysia) => app.derive(
       } else {
         // Verify Membership
         const membership = await centralDb
-          .withSchema("public") // ✅ FIX: Force public schema
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .selectFrom("tenant_membership" as any)
+          .withSchema("public")
+          .selectFrom("tenant_membership")
           .select("role")
           .where("tenant_id", "=", tenant.id)
           .where("user_id", "=", user.id)
           .executeTakeFirst();
 
-        const mem = membership as { role: string } | undefined;
+        const mem = membership;
 
         if (!mem) {
           console.warn(`[Auth] User ${user.id} denied access to tenant ${tenant.subdomain}`);

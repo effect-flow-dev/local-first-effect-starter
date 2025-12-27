@@ -83,7 +83,14 @@ export const subscribeToPush = () =>
 
         // 4. Send to Server
         const subJson = subscription.toJSON();
-        if (!subJson.endpoint || !subJson.keys?.p256dh || !subJson.keys?.auth) {
+        
+        // Extract values to variables for type narrowing and to satisfy noUncheckedIndexedAccess
+        const endpoint = subJson.endpoint;
+        const p256dh = subJson.keys?.p256dh;
+        const auth = subJson.keys?.auth;
+
+        // Strict check ensuring all required fields are strings
+        if (!endpoint || !p256dh || !auth) {
             return yield* Effect.fail(new Error("Invalid subscription data generated"));
         }
 
@@ -93,18 +100,17 @@ export const subscribeToPush = () =>
         }
 
         yield* clientLog("debug", "[Push] Sending subscription to server...", {
-            endpoint: subJson.endpoint,
+            endpoint,
         });
 
-        // ✅ FIX: Explicitly cast response to PushResponse to avoid 'any' leakage
         const response = yield* Effect.tryPromise(async () => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
-            const res = await (api.api as any).push.subscribe.post(
+            // Using standard fetch via Elysia client logic if type inference fails
+            const res = await api.api.push.subscription.post(
                 {
-                    endpoint: subJson.endpoint!,
+                    endpoint: endpoint,
                     keys: {
-                        p256dh: subJson.keys!.p256dh,
-                        auth: subJson.keys!.auth,
+                        p256dh: p256dh,
+                        auth: auth,
                     },
                 },
                 {

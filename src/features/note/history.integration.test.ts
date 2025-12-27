@@ -5,7 +5,7 @@ import { handleCreateNote, handleUpdateTask, handleRevertBlock } from "./note.mu
 import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import { randomUUID } from "node:crypto";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
-import { sql, type Kysely } from "kysely"; // ✅ Import sql
+import { sql, type Kysely } from "kysely";
 import type { Database } from "../../types";
 
 // Mock LinkService to avoid side effects
@@ -31,7 +31,6 @@ describe("History & Rollback (Integration)", () => {
 
   // Helper to artificially age the history timestamps
   const ageHistory = async (seconds: number) => {
-      // ✅ FIX: Use top-level sql template tag and standard Postgres interval math
       await db.updateTable("block_history")
         .set({
             timestamp: sql`timestamp - (${seconds} * interval '1 second')`
@@ -64,7 +63,6 @@ describe("History & Rollback (Integration)", () => {
         );
 
         // FORCE TIME GAP (> 20 mins) to prevent session merge
-        // We simulate the previous entry being 1 hour old
         yield* Effect.promise(() => ageHistory(3600));
 
         // 2. Mutation A: Mark as Complete (v2)
@@ -107,7 +105,6 @@ describe("History & Rollback (Integration)", () => {
               .execute()
         );
 
-        // Expect 3 distinct entries because we forced time gaps
         expect(history).toHaveLength(3); 
         
         const targetEntry = history[1];
@@ -117,8 +114,9 @@ describe("History & Rollback (Integration)", () => {
             ? JSON.parse(targetEntry.change_delta) 
             : targetEntry.change_delta;
             
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const tArgs = targetArgs as any;
+        // ✅ FIX: Use strict type assertion instead of 'any' cast
+        const tArgs = targetArgs as { isComplete: boolean };
+        
         const targetSnapshot = {
             fields: {
                 is_complete: tArgs.isComplete,
@@ -141,10 +139,8 @@ describe("History & Rollback (Integration)", () => {
             db.selectFrom("block").select(["fields", "version"]).where("id", "=", blockId).executeTakeFirstOrThrow()
         );
         
-        // Should be True again
         // @ts-expect-error jsonb access
         expect(finalBlock.fields.is_complete).toBe(true);
-        // Version should have bumped
         expect(finalBlock.version).toBe(4);
 
         // 7. Verify Audit Trail

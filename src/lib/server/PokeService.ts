@@ -1,6 +1,6 @@
 // FILE: src/lib/server/PokeService.ts
 import { Effect, PubSub, Stream } from "effect";
-import type { UserId } from "../../types/generated/public/User";
+import type { UserId } from "../../types/generated/central/public/User";
 
 // Maps UserId -> The User's personal message stream
 // Kept global to persist across HTTP requests in the server runtime

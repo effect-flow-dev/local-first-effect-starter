@@ -126,10 +126,10 @@ export const handleCreateNote = (
         const newNote = {
             id: args.id,
             title: finalTitle,
-            content: content as unknown,
+            content: content as unknown, // DB expects unknown/jsonb
             user_id: args.userID,
             version: 1,
-            created_at: sql<Date>`now()`, // Server Sync Time
+            created_at: sql<Date>`now()`, 
             updated_at: sql<Date>`now()`,
             device_created_at: deviceTime,
             global_version: String(globalVersion),
@@ -137,8 +137,7 @@ export const handleCreateNote = (
         };
 
         yield* Effect.tryPromise({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument
-            try: () => db.insertInto("note").values(newNote as any).execute(),
+            try: () => db.insertInto("note").values(newNote).execute(),
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
 
@@ -158,8 +157,7 @@ export const handleCreateNote = (
             }));
 
             yield* Effect.tryPromise({
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument
-                try: () => db.insertInto("block").values(enrichedBlocks as any).execute(),
+                try: () => db.insertInto("block").values(enrichedBlocks).execute(),
                 catch: (cause) => new NoteDatabaseError({ cause }),
             });
         }

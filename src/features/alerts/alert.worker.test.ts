@@ -5,11 +5,13 @@ import { scanAndAlert } from "./alert.worker";
 import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import { randomUUID } from "node:crypto";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
+// ✅ FIX: Import Branded Types for DB Inserts
+import type { TaskId } from "#src/types/generated/tenant/tenant_template/Task";
+import type { PushSubscriptionId } from "#src/types/generated/tenant/tenant_template/PushSubscription";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 
 // --- Mocks ---
-// Mock the Push service
 const { mockSendPushNotification } = vi.hoisted(() => ({
   mockSendPushNotification: vi.fn(() => Effect.void),
 }));
@@ -19,7 +21,6 @@ vi.mock("../../lib/server/push", () => ({
 }));
 
 // Mock centralDb
-// We hoist both values so we can access them in the tests
 const { mockCentralDb, mockExecute } = vi.hoisted(() => {
   const mockExecute = vi.fn();
   return {
@@ -33,14 +34,18 @@ const { mockCentralDb, mockExecute } = vi.hoisted(() => {
   };
 });
 
+// ✅ FIX: Define a minimal interface for the global mock injection
+interface GlobalWithTestDb {
+    testDbInstance?: Kysely<Database>;
+}
+
 vi.mock("../../db/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../db/client")>();
   return {
     ...actual,
-    centralDb: mockCentralDb, // ✅ Fix: Use the hoisted object directly
-    // Mock getTenantDb to return our test database instance
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    getTenantDb: () => (globalThis as any).testDbInstance,
+    centralDb: mockCentralDb,
+    // Mock getTenantDb to return our test database instance using safe cast
+    getTenantDb: () => (globalThis as unknown as GlobalWithTestDb).testDbInstance!,
   };
 });
 
@@ -64,9 +69,8 @@ describe("Alert Worker (Integration)", () => {
     db = setup.db;
     cleanup = setup.cleanup;
     
-    // Hack: Expose db instance for the mocked getTenantDb
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (globalThis as any).testDbInstance = db;
+    // ✅ FIX: Use typed global property injection
+    (globalThis as unknown as GlobalWithTestDb).testDbInstance = db;
 
     // 2. Mock Central DB Response via the hoisted mock function
     mockExecute.mockResolvedValue([
@@ -80,8 +84,8 @@ describe("Alert Worker (Integration)", () => {
 
     return async () => {
       await cleanup();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (globalThis as any).testDbInstance;
+      // ✅ FIX: Cleanup typed global property
+      delete (globalThis as unknown as GlobalWithTestDb).testDbInstance;
     };
   });
 
@@ -128,9 +132,9 @@ describe("Alert Worker (Integration)", () => {
 
       yield* Effect.promise(() =>
         db.insertInto("task")
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          // ✅ FIX: Use Branded Type ID to avoid 'any' cast
           .values({
-            id: randomUUID(),
+            id: randomUUID() as TaskId,
             user_id: userId,
             source_block_id: blockId,
             content: "Do this thing",
@@ -139,21 +143,21 @@ describe("Alert Worker (Integration)", () => {
             alert_sent_at: opts.alertSent ? new Date() : null,
             created_at: new Date(),
             updated_at: new Date(),
-          } as any)
+          })
           .execute()
       );
 
       yield* Effect.promise(() =>
         db.insertInto("push_subscription")
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          // ✅ FIX: Use Branded Type ID to avoid 'any' cast
           .values({
-            id: randomUUID(),
+            id: randomUUID() as PushSubscriptionId,
             user_id: userId,
             endpoint: "https://fcm.googleapis.com/fcm/send/test",
             p256dh: "key",
             auth: "auth",
             created_at: new Date(),
-          } as any)
+          })
           .execute()
       );
     });

@@ -9,7 +9,7 @@ import {
   type PullResponse,
 } from "../../lib/shared/replicache-schemas";
 import type { PublicUser } from "../../lib/shared/schemas";
-import type { ReplicacheClientGroupId } from "../../types/generated/public/ReplicacheClientGroup";
+import type { ReplicacheClientGroupId } from "../../types/generated/tenant/tenant_template/ReplicacheClientGroup";
 import { PullError, InvalidRequestError, ClientStateNotFoundError } from "./Errors";
 import { getCurrentGlobalVersion } from "./versioning";
 

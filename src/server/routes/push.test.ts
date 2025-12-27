@@ -45,7 +45,7 @@ vi.mock("../../db/client", () => ({
   centralDb: {} as any,
 }));
 
-describe("POST /api/push/subscribe", () => {
+describe("POST /api/push/subscription", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default State: Authenticated with valid DB
@@ -64,7 +64,8 @@ describe("POST /api/push/subscribe", () => {
       },
     };
 
-    const req = new Request("http://localhost/api/push/subscribe", {
+    // ✅ FIX: Update URL to match route definition (/subscription)
+    const req = new Request("http://localhost/api/push/subscription", {
       method: "POST",
       headers: { 
           "Content-Type": "application/json",
@@ -92,7 +93,8 @@ describe("POST /api/push/subscribe", () => {
         keys: { p256dh: "k", auth: "a" }
     };
 
-    const req = new Request("http://localhost/api/push/subscribe", {
+    // ✅ FIX: Update URL to match route definition (/subscription)
+    const req = new Request("http://localhost/api/push/subscription", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

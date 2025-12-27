@@ -2,7 +2,7 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Data, Effect } from "effect";
-import type { UserId } from "../../types/generated/public/User";
+import type { UserId } from "../../types/generated/central/public/User";
 import { config } from "./Config";
 import { generateUUID } from "./utils";
 

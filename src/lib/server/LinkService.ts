@@ -2,9 +2,9 @@
 import { Data, Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
-import type { UserId } from "../../types/generated/public/User";
+import type { UserId } from "../../types/generated/central/public/User";
 import type { NoteId, BlockId } from "../shared/schemas"; // ✅ Added BlockId import
-import type { NewLink } from "../../types/generated/public/Link";
+import type { NewLink } from "#src/types/generated/tenant/tenant_template/Link";
 
 const WIKI_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
 

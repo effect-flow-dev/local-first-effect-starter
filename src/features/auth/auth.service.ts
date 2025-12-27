@@ -6,8 +6,8 @@ import { centralDb } from "../../db/client";
 import { getTenantConnection } from "../../db/connection-manager";
 import { generateId } from "../../lib/server/utils";
 import type { UserId } from "../../lib/shared/schemas";
-import type { EmailVerificationTokenId } from "../../types/generated/public/EmailVerificationToken";
-import type { PasswordResetTokenId } from "../../types/generated/public/PasswordResetToken";
+import type { EmailVerificationTokenId } from "../../types/generated/central/public/EmailVerificationToken";
+import type { PasswordResetTokenId } from "../../types/generated/central/public/PasswordResetToken";
 import { tenantMigrationObjects } from "../../db/migrations/tenant-migrations-manifest";
 import {
   TokenCreationError,
