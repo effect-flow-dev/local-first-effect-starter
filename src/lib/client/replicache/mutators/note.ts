@@ -21,7 +21,6 @@ export const createNote = async (
         title: string;
         initialBlockId?: string;
         notebookId?: NotebookId;
-        // ✅ NEW: Geo arguments
         latitude?: number;
         longitude?: number;
     },
@@ -48,9 +47,6 @@ export const createNote = async (
         created_at: now,
         updated_at: now,
         notebook_id: args.notebookId || null,
-        // We do NOT store geo on the note itself locally because Replicache
-        // doesn't have a Block store yet in the client (it's embedded).
-        // The args will be sent to server which WILL store geo on the block.
     };
 
     const jsonCompatibleNote = {
@@ -71,8 +67,8 @@ export const updateNote = async (
     tx: WriteTransaction,
     args: {
         id: NoteId;
-        title: string;
-        content: TiptapDoc;
+        title?: string; // ✅ Made Optional
+        content?: TiptapDoc; // ✅ Made Optional
         notebookId?: NotebookId | null;
     },
 ) => {
@@ -92,8 +88,8 @@ export const updateNote = async (
 
         const updatedNote: AppNote = {
             ...note,
-            title: args.title,
-            content: args.content,
+            title: args.title ?? note.title,     // ✅ Merge existing if undefined
+            content: args.content ?? note.content, // ✅ Merge existing if undefined
             version: note.version + 1,
             updated_at: new Date(),
             notebook_id: nextNotebookId,

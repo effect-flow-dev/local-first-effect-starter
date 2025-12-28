@@ -37,8 +37,8 @@ import {
 import { PushError } from "./Errors";
 import { NoteDatabaseError, VersionConflictError } from "../note/Errors";
 import { hasPermission, PERMISSIONS, type Role, type Permission } from "../../lib/shared/permissions";
+import { injectConflictAlert } from "../note/utils/content-traversal"; // ✅ IMPORTED
 
-// --- Conflict Resolution Helpers ---
 
 interface GenericTiptapNode {
   type: string;
@@ -51,40 +51,6 @@ interface GenericTiptapNode {
   content?: GenericTiptapNode[];
   [key: string]: unknown;
 }
-
-const injectConflictAlert = (
-  content: GenericTiptapNode,
-  targetBlockId: string,
-  message: string,
-): boolean => {
-  if (!content || !content.content || !Array.isArray(content.content))
-    return false;
-
-  const nodes = content.content;
-
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    
-    if (node?.attrs?.blockId === targetBlockId) {
-      const alertNode: GenericTiptapNode = {
-        type: "alertBlock",
-        attrs: {
-          level: "error",
-          message,
-        },
-      };
-      nodes.splice(i + 1, 0, alertNode);
-      return true;
-    }
-
-    if (node?.content && Array.isArray(node.content)) {
-      if (injectConflictAlert(node, targetBlockId, message)) {
-        return true;
-      }
-    }
-  }
-  return false;
-};
 
 // Map mutations to required permissions
 const MUTATION_PERMISSIONS: Record<string, Permission> = {
@@ -101,7 +67,6 @@ const MUTATION_PERMISSIONS: Record<string, Permission> = {
     incrementCounter: PERMISSIONS.BLOCK_EDIT,
 };
 
-// Check if an error is a Schema ParseError
 const isParseError = (error: unknown): error is ParseError => {
   return (
     typeof error === 'object' &&
@@ -110,8 +75,6 @@ const isParseError = (error: unknown): error is ParseError => {
     (error as { _tag: unknown })._tag === 'ParseError'
   );
 };
-
-// --- Main Handler ---
 
 export const handlePush = (
   req: PushRequest,
@@ -146,7 +109,6 @@ export const handlePush = (
           for (const mutation of req.mutations) {
             const { clientID, id: mutationID, name, args } = mutation;
 
-            // Lock client state
             let clientState = await trx
               .selectFrom("replicache_client")
               .selectAll()
@@ -175,9 +137,7 @@ export const handlePush = (
             const lastMutationID = clientState.last_mutation_id ?? 0;
             const expectedID = lastMutationID + 1;
 
-            if (mutationID < expectedID) {
-              continue; // Already processed
-            }
+            if (mutationID < expectedID) continue;
             if (mutationID > expectedID) {
               console.warn(`Mutation ${mutationID} from future? Expected ${expectedID}. Skipping/Gap.`);
               continue; 
@@ -188,7 +148,6 @@ export const handlePush = (
             if (requiredPerm) {
                 if (!currentRole || !hasPermission(currentRole, requiredPerm)) {
                     console.warn(`[RBAC] User ${user.id} (${currentRole}) attempted ${name} without ${requiredPerm}. Denied.`);
-                    // Even if denied, we must acknowledge the mutation so client doesn't retry
                     await trx
                       .updateTable("replicache_client")
                       .set({ last_mutation_id: mutationID })
@@ -206,9 +165,6 @@ export const handlePush = (
                 continue;
             }
 
-            // Execute the Business Logic
-            // We use Effect to wrap the logic, but we run it inside a try/catch block
-            // to implement the "Poison Pill" strategy.
             const effectToRun = Effect.gen(function* () {
               if (name === "createNote") {
                 const a = yield* Schema.decodeUnknown(CreateNoteArgsSchema)(args);
@@ -226,7 +182,6 @@ export const handlePush = (
                 const a = yield* Schema.decodeUnknown(UpdateBlockArgsSchema)(args);
                 yield* handleUpdateBlock(trx, a, user.id);
               } else if (name === "createBlock") { 
-                // ✅ STRICT VALIDATION: Using Discriminated Union Schema
                 const a = yield* Schema.decodeUnknown(CreateBlockArgsSchema)(args);
                 yield* handleCreateBlock(trx, a, user.id);
               } else if (name === "createNotebook") {
@@ -247,16 +202,12 @@ export const handlePush = (
               }
             });
 
-            // ✅ POISON PILL FIX:
-            // We must NOT let a single mutation failure abort the entire push transaction.
             try {
                 await Effect.runPromise(effectToRun);
             } catch (err: unknown) {
-                // Handle Specific Logic Errors (e.g. Conflicts)
                 if (err instanceof VersionConflictError) {
                     console.warn(`[Push] Version Conflict detected for ${name}. Injecting alert...`);
                     
-                    // Run conflict resolution logic in a separate Effect to ensure safety
                     const conflictResolution = Effect.gen(function*() {
                         const blockRow = yield* Effect.tryPromise({
                           try: () => trx.selectFrom("block")
@@ -278,20 +229,11 @@ export const handlePush = (
 
                         if (!noteRow || !noteRow.content) return;
 
-                        // Construct message
-                        let message = `Sync Conflict: Server v${err.expectedVersion} vs Your v${err.actualVersion}`;
-                        try {
-                            const serverFields = (blockRow.fields as Record<string, unknown>) || {};
-                            if (name === "updateTask") {
-                                 
-                                const clientArgs = args as { isComplete: boolean };
-                                const sStat = serverFields.is_complete ? "done" : "todo";
-                                const cStat = clientArgs.isComplete ? "done" : "todo";
-                                message = `Sync Conflict: Server is '${sStat}', you tried '${cStat}'. Rejected.`;
-                            }
-                        } catch (e) { console.warn("Msg gen failed", e); }
-
+                        const message = `Sync Conflict: Server v${err.expectedVersion} vs Your v${err.actualVersion}`;
+                        
                         const content = JSON.parse(JSON.stringify(noteRow.content)) as GenericTiptapNode;
+                        
+                        // Use Shared Injector
                         if (injectConflictAlert(content, err.blockId, message)) {
                              const res = yield* Effect.tryPromise({
                                  try: async () => {
@@ -314,25 +256,19 @@ export const handlePush = (
                         }
                     });
 
-                    // Attempt conflict resolution; if it fails, just log it.
                     await Effect.runPromise(conflictResolution.pipe(
                         Effect.catchAll(e => Effect.logError("Conflict resolution failed", e))
                     ));
 
                 } else if (isParseError(err)) {
-                    // ✅ Specific logging for Schema Validation Errors
                     console.error(`[Push] Schema Validation Failed for ${name}:`, Effect.runSync(TreeFormatter.formatError(err)));
                 } else if (err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === '(FiberFailure) ParseError') {
-                    // ✅ Catch FiberFailure wrapping ParseError
-                    // This happens when Effect.runPromise catches a Schema decode failure from inside the effect
                     console.error(`[Push] Schema Validation Failed for ${name} (FiberFailure):`, JSON.stringify(err, null, 2));
                 } else {
-                    // "Poison Pill" Case: Unknown bug.
                     console.error(`[Push] Poison Pill caught! Mutation ${name} (ID: ${mutationID}) failed. Consuming error to unblock queue.`, err);
                 }
             }
 
-            // Always Advance the Pointer to acknowledge processing
             await trx
               .updateTable("replicache_client")
               .set({ last_mutation_id: mutationID })
@@ -341,7 +277,6 @@ export const handlePush = (
           }
         }),
       catch: (cause) => {
-        // Only catch transient infra errors here.
         console.error("[Push] Transaction Failed (Transient):", cause);
         return new PushError({ cause });
       },

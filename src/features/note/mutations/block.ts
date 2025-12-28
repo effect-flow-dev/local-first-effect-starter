@@ -34,7 +34,6 @@ export const handleCreateBlock = (
         yield* Effect.logInfo(`[handleCreateBlock] Creating block ${args.blockId} in note ${args.noteId}`);
         const globalVersion = yield* getNextGlobalVersion(db);
 
-        // 1. Calculate Order (Append to bottom)
         const maxOrderRow = yield* Effect.tryPromise({
             try: () =>
                 db.selectFrom("block")
@@ -46,8 +45,6 @@ export const handleCreateBlock = (
 
         const nextOrder = (maxOrderRow?.maxOrder ?? 0) + 1;
 
-        // 2. Insert Block
-        // We strictly explicitly map fields to ensure type safety without 'as any'
         yield* Effect.tryPromise({
             try: () =>
                 db.insertInto("block")
@@ -57,7 +54,6 @@ export const handleCreateBlock = (
                         user_id: userId,
                         type: args.type,
                         content: args.content ?? "",
-                        // Serialize fields to JSON for storage
                         fields: JSON.stringify(args.fields || {}),
                         order: nextOrder,
                         depth: 0,
@@ -69,10 +65,8 @@ export const handleCreateBlock = (
                         created_at: sql<Date>`now()`,
                         updated_at: sql<Date>`now()`,
                         global_version: String(globalVersion),
-                        // ✅ Typed Geo Fields
                         latitude: args.latitude ?? null,
                         longitude: args.longitude ?? null,
-                        // ✅ Typed Audit Field
                         device_created_at: args.deviceCreatedAt ?? null,
                         parent_id: null
                     })
@@ -80,7 +74,6 @@ export const handleCreateBlock = (
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
 
-        // 3. Log History
         yield* logBlockHistory(db, {
             blockId: args.blockId,
             noteId: args.noteId,
@@ -100,7 +93,10 @@ export const handleUpdateBlock = (
         const globalVersion = yield* getNextGlobalVersion(db);
 
         const blockRow = yield* Effect.tryPromise({
-            try: () => db.selectFrom("block").select(["note_id", "version"]).where("id", "=", args.blockId).executeTakeFirst(),
+            try: () => db.selectFrom("block")
+                .select(["note_id", "version", "type", "fields"])
+                .where("id", "=", args.blockId)
+                .executeTakeFirst(),
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
 
@@ -131,7 +127,30 @@ export const handleUpdateBlock = (
             }));
         }
 
-        // Update Note Content (Legacy/Tiptap compatibility)
+        // --- SMART CHECK: Deferred Validation ---
+        let validationWarning: string | undefined = undefined;
+        let validationStatus: 'warning' | null = null;
+
+        if (blockRow.type === "form_meter") {
+            const currentFields = (blockRow.fields as Record<string, unknown>) || {};
+            const mergedFields = { ...currentFields, ...args.fields };
+            
+            const val = Number(mergedFields.value);
+            const min = Number(mergedFields.min ?? 0);
+            const max = Number(mergedFields.max ?? 100);
+
+            if (!isNaN(val) && (val < min || val > max)) {
+                validationWarning = `Input ${val} is outside expected range (${min}-${max}). Please review.`;
+                validationStatus = 'warning';
+                yield* Effect.logInfo(`[SmartCheck] Flagged meter ${args.blockId}: ${validationWarning}`);
+            }
+        }
+
+        const fieldsToSave = { 
+            ...args.fields,
+            validation_status: validationStatus 
+        };
+
         if (blockRow?.note_id) {
             const noteRow = yield* Effect.tryPromise({
                 try: () => db.selectFrom("note").select(["id", "content"]).where("id", "=", blockRow.note_id!).executeTakeFirst(),
@@ -140,7 +159,7 @@ export const handleUpdateBlock = (
 
             if (noteRow && noteRow.content) {
                 const content = JSON.parse(JSON.stringify(noteRow.content)) as ContentNode;
-                if (updateBlockInContent(content, args.blockId, args.fields)) {
+                if (updateBlockInContent(content, args.blockId, fieldsToSave, validationWarning)) {
                     yield* Effect.tryPromise({
                         try: () => db.updateTable("note").set({
                             content: content as unknown,
@@ -156,7 +175,7 @@ export const handleUpdateBlock = (
 
         yield* Effect.tryPromise({
             try: () => db.updateTable("block").set({
-                fields: sql`fields || ${JSON.stringify(args.fields)}::jsonb`,
+                fields: sql`fields || ${JSON.stringify(fieldsToSave)}::jsonb`,
                 version: sql<number>`version + 1`,
                 updated_at: sql<Date>`now()`,
                 global_version: String(globalVersion),
@@ -164,12 +183,11 @@ export const handleUpdateBlock = (
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
 
-        // ✅ Propagate due_at to task table for alerting
         if (args.fields && 'due_at' in args.fields) {
             yield* Effect.tryPromise({
                 try: () =>
                     db.updateTable("task")
-                        // @ts-expect-error Kysely codegen update pending for due_at
+                        // @ts-expect-error Kysely codegen update pending
                         .set({ due_at: args.fields.due_at ? args.fields.due_at : null })
                         .where("source_block_id", "=", args.blockId)
                         .execute(),
@@ -193,7 +211,7 @@ export const handleRevertBlock = (
         });
 
         if (!blockRow) {
-            yield* Effect.logWarning(`[handleRevertBlock] Block ${args.blockId} not found (might be deleted).`);
+            yield* Effect.logWarning(`[handleRevertBlock] Block ${args.blockId} not found.`);
             return;
         }
 
@@ -247,6 +265,7 @@ export const handleRevertBlock = (
         }
     });
 
+// ✅ FIX: Ensure 3rd argument 'userId' is present
 export const handleIncrementCounter = (
     db: Kysely<Database> | Transaction<Database>,
     args: Schema.Schema.Type<typeof IncrementCounterArgsSchema>,
@@ -266,7 +285,6 @@ export const handleIncrementCounter = (
             return;
         }
 
-        // Log History
         if (blockRow.note_id) {
             yield* logBlockHistory(db, {
                 blockId: args.blockId,
@@ -277,7 +295,6 @@ export const handleIncrementCounter = (
             });
         }
 
-        // Atomic Update using raw SQL jsonb_set logic
         yield* Effect.tryPromise({
             try: () =>
                 sql`

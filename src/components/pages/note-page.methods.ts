@@ -26,8 +26,6 @@ import { clientLog } from "../../lib/client/clientLog";
 export const handleTitleKeyDown = (component: NotePage, e: KeyboardEvent) => {
   if (e.key === "Enter") {
     e.preventDefault();
-    // In block mode, we might want to focus the first block instead of generic editor
-    // For now, we keep existing behavior which might need adjustment based on rendered DOM
     const editorElement =
       component.querySelector<TiptapEditor>("tiptap-editor");
     editorElement?.focusEditor();
@@ -58,7 +56,6 @@ export const handleEditorClick = (component: NotePage, event: MouseEvent) => {
   }
 };
 
-// Preview Handlers (unchanged)
 let previewDebounceFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
 
 export const handleLinkHover = (
@@ -110,7 +107,6 @@ export const handleLinkHoverEnd = (component: NotePage) => {
   component.dispatch({ type: "PREVIEW_HOVER_END" });
 };
 
-// ... Initialization ...
 export const initializeState = (component: NotePage) => {
   component["_replicacheUnsubscribe"]?.();
   component.dispatch({ type: "INITIALIZE_START" });
@@ -127,11 +123,9 @@ export const initializeState = (component: NotePage) => {
 
     component["_replicacheUnsubscribe"] = replicache.client.subscribe(
       async (tx) => {
-        // Query Note, All Notes (for Linking), AND Blocks for this note
         const [note, allNotes, blocks] = await Promise.all([
           tx.get(noteKey),
           tx.scan({ prefix: "note/" }).values().toArray(),
-          // Use the blocksByNoteId index to efficiently find blocks for this note
           tx.scan({ indexName: "blocksByNoteId", prefix: component.id }).values().toArray(),
         ]);
         return { note, allNotes, blocks };
@@ -156,12 +150,10 @@ export const initializeState = (component: NotePage) => {
         }
 
         const resilientParseEffect = Effect.gen(function* () {
-          // 1. Decode Note
           const note = yield* Schema.decodeUnknown(NoteSchema)(
             result.note,
           ).pipe(Effect.mapError((cause) => new NoteParseError({ cause })));
 
-          // 2. Decode All Notes (Metadata only)
           const allNotes: AppNote[] = [];
           for (const noteJson of result.allNotes) {
             const noteOption =
@@ -171,16 +163,13 @@ export const initializeState = (component: NotePage) => {
             }
           }
 
-          // 3. Decode & Sort Blocks
           const blocks: AppBlock[] = [];
           for (const blockJson of result.blocks) {
-             // We use decodeUnknownOption to skip malformed blocks gracefully during sync
              const blockOpt = Schema.decodeUnknownOption(BlockSchema)(blockJson);
              if (Option.isSome(blockOpt)) {
                  blocks.push(blockOpt.value);
              }
           }
-          // Sort by 'order' field
           blocks.sort((a, b) => a.order - b.order);
 
           return { note, allNotes, blocks };
@@ -192,7 +181,7 @@ export const initializeState = (component: NotePage) => {
               const { note, allNotes, blocks } = exit.value;
               component.dispatch({
                 type: "DATA_UPDATED",
-                payload: { note, allNotes, blocks }, // ✅ Pass blocks
+                payload: { note, allNotes, blocks },
               });
             } else {
               runClientUnscoped(clientLog(
@@ -225,25 +214,22 @@ export const initializeState = (component: NotePage) => {
 export const flushChangesEffect = (component: NotePage) =>
   Effect.gen(function* () {
     const state = component.state.value;
-    
     if (state.status !== "ready") return;
 
-    // Note: With block-based architecture, flushing 'note' might only be needed 
-    // for title or global metadata. Block updates are dispatched individually via
-    // their own events (update-block). 
-    // However, if we still allow editing the 'content' field as a fallback, we save it.
-    
     const noteToSave = state.note;
-    if (!noteToSave || !noteToSave.content) return;
+    if (!noteToSave) return;
 
     const replicache = yield* ReplicacheService;
 
+    // ✅ FIXED: Do NOT send 'content' here. 
+    // Content is now managed by granular blocks via updateBlock mutations.
+    // Sending stale content (which NotePage holds) would clobber blocks on the server.
     yield* Effect.tryPromise({
       try: () => {
         return replicache.client.mutate.updateNote({
           id: component.id as NoteId,
           title: noteToSave.title,
-          content: noteToSave.content,
+          // content: noteToSave.content, <-- REMOVED to prevent clobbering
           notebookId: noteToSave.notebook_id, 
         });
       },
@@ -319,10 +305,8 @@ export const scheduleSave = (component: NotePage) => {
     if (state.status !== "ready") return;
     
     const noteToSave = state.note;
-
     const replicache = yield* ReplicacheService;
 
-    // Check title uniqueness only if title changed (optimization omitted for brevity, checking all)
     const allNotesJson = yield* Effect.promise(() =>
       replicache.client.query((tx) =>
         tx.scan({ prefix: "note/" }).values().toArray(),

@@ -23,12 +23,10 @@ import { ReplicacheService } from "../../lib/client/replicache";
 import { v4 as uuidv4 } from "uuid";
 import { getCurrentPosition } from "../../lib/client/geolocation";
 
-// Presence Imports
 import { sendFocus } from "../../lib/client/replicache/websocket";
 import { presenceState } from "../../lib/client/stores/presenceStore";
 import "../ui/presence-indicator";
 
-// --- Components ---
 import "../editor/tiptap-editor";
 import "../blocks/smart-checklist";
 import "../blocks/meter-input";
@@ -56,13 +54,19 @@ import { openHistory } from "../../lib/client/stores/historyStore";
 import { clientLog } from "../../lib/client/clientLog";
 import type { ChecklistItem } from "../blocks/smart-checklist";
 
-// Type Definitions used in _renderBlock and event handlers
+// Typed Field Interfaces
 interface ChecklistFields { items: ChecklistItem[]; }
-interface MeterFields { label: string; value: number; min: number; max: number; unit: string; }
+interface MeterFields { 
+    label: string; 
+    value: number; 
+    min: number; 
+    max: number; 
+    unit: string;
+    validation_status?: string; // ✅ Added validation status
+}
 interface MapFields { zoom?: number; style?: string; }
 interface TiptapTextFields { content: TiptapDoc; }
 
-// --- Custom Event Details for safer casting ---
 interface UpdateTaskStatusEventDetail { blockId: BlockId; isComplete: boolean; }
 interface EditorUpdateEventDetail { content: TiptapDoc; }
 interface LinkHoverEventDetail { target: string; x: number; y: number; }
@@ -185,14 +189,9 @@ export class NotePage extends LitElement {
             
             yield* clientLog("info", `[NotePage] Adding block ${type} at`, location);
 
-            // Prepare Geospatial Args
-            // Note: Schema expects `undefined` if missing, not `null` for optional args usually,
-            // but `null` is often valid for "optional" in DB. 
-            // The `CreateBlockArgsSchema` uses `Schema.optional(LatitudeSchema)`, so undefined is best.
             const latitude = location?.latitude;
             const longitude = location?.longitude;
 
-            // ✅ STRICTLY TYPED MUTATIONS using Switch
             switch (type) {
                 case "form_checklist":
                     yield* Effect.promise(() =>
@@ -249,7 +248,6 @@ export class NotePage extends LitElement {
 
     private _initializeState = () => initializeState(this);
 
-    // --- Presence Logic ---
     private _handleBlockFocusIn = (e: FocusEvent) => {
         const target = e.target as HTMLElement;
         const wrapper = target.closest('[data-block-id]');
@@ -372,6 +370,7 @@ export class NotePage extends LitElement {
                 break;
             }
             case 'form_meter': {
+                // ✅ Pass validation_status to display visual warnings
                 const fields = block.fields as MeterFields;
                 content = html`
                     <meter-input
@@ -381,6 +380,7 @@ export class NotePage extends LitElement {
                         .min=${fields.min || 0}
                         .max=${fields.max || 100}
                         .unit=${fields.unit || ""}
+                        .validationStatus=${fields.validation_status || ""}
                     ></meter-input>`;
                 break;
             }
