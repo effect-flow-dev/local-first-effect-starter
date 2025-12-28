@@ -13,8 +13,9 @@ import "../../components/pages/verify-email-page";
 import "../../components/pages/profile-page";
 import "../../components/pages/forgot-password-page";
 import "../../components/pages/reset-password-page";
-// ✅ NEW: Import selection page
 import "../../components/pages/workspace-selection-page";
+// ✅ NEW: Import Table Page
+import "../../components/pages/notes-table-page";
 
 const UnauthorizedView = (): ViewResult => ({
   template: html`<div>403 Unauthorized</div>`,
@@ -40,6 +41,12 @@ const routes: Route[] = [
   {
     pattern: /^\/$/,
     view: () => ({ template: html`<notes-page></notes-page>` }),
+    meta: { requiresAuth: true },
+  },
+  // ✅ NEW: Notes Table View Route
+  {
+    pattern: /^\/notes\/table$/,
+    view: () => ({ template: html`<notes-table-page></notes-table-page>` }),
     meta: { requiresAuth: true },
   },
   {
@@ -71,14 +78,9 @@ const routes: Route[] = [
     }),
     meta: { isPublicOnly: true },
   },
-  // ✅ NEW: Workspace Selection Route
   {
     pattern: /^\/select-workspace$/,
     view: () => ({ template: html`<workspace-selection-page></workspace-selection-page>` }),
-    // This route does not strictly require the 'authStore' to be in 'authenticated' state 
-    // in the traditional sense if we treat it as an interstitial step, 
-    // but practically the user has a token. Let's mark it public to avoid the app-shell redirecting 
-    // to /login automatically if the store isn't fully updated yet.
     meta: { }, 
   },
   {
