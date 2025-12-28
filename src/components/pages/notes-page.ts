@@ -10,6 +10,7 @@ import { NotionButton } from "../ui/notion-button";
 import styles from "./NotesView.module.css";
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { clientLog } from "../../lib/client/clientLog";
+import { navigate } from "../../lib/client/router"; // ✅ Added Import
 import type { NoteId } from "../../lib/shared/schemas";
 
 import {
@@ -154,6 +155,15 @@ export class NotesPage extends LitElement {
                     ${allSelected ? t("notes.deselect_all") : t("notes.select_all")}
                 </button>
             ` : nothing}
+
+            <!-- ✅ NEW: Table View Button -->
+            <button
+                @click=${() => runClientUnscoped(navigate("/notes/table"))}
+                class="mr-2 rounded-md bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm ring-1 ring-inset ring-zinc-300 hover:bg-zinc-50 transition-colors"
+            >
+                Table View
+            </button>
+
             ${NotionButton({
               children: isCreating ? t("notes.creating") : t("notes.create_new"),
               onClick: () => this.dispatch({ type: "CREATE_NOTE_START" }),
@@ -185,7 +195,6 @@ export class NotesPage extends LitElement {
               `}
         </div>
 
-        <!-- Floating Bulk Action Bar -->
         ${selectionCount > 0 ? html`
             <div class=${styles.actionBar}>
                 <span class=${styles.selectionCount}>${selectionCount} selected</span>
