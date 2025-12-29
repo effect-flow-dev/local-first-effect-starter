@@ -5,7 +5,7 @@ provider "hcloud" {
 resource "hcloud_ssh_key" "default" {
   name       = "ssh-key"
   # Using absolute path to be safe, update filename if you use id_ed25519.pub
-  public_key = file("~/.ssh/id_rsa.pub")
+  public_key = file("~/.ssh/id_effect_flow.pub")
 }
 
 resource "hcloud_server" "web" {
@@ -49,6 +49,16 @@ resource "hcloud_server" "web" {
     AWS_ACCESS_KEY_ID=${var.s3_access_key}
     AWS_SECRET_ACCESS_KEY=${var.s3_secret_key}
     AWS_REGION=${var.s3_region}
+    GEMINI_API_KEY=${var.gemini_api_key}
+    VAPID_PUBLIC_KEY=${var.vapid_public_key}
+    VITE_VAPID_PUBLIC_KEY=${var.vapid_public_key}
+    VAPID_PRIVATE_KEY=${var.vapid_private_key}
+    VAPID_SUBJECT=${var.vapid_subject}
+    # Ensure these point to the actual domain in prod, not localhost
+    VITE_API_BASE_URL=https://${var.domain_name}
+    VITE_WS_URL=wss://${var.domain_name}
+    VITE_ROOT_DOMAIN=${var.domain_name}
+    ROOT_DOMAIN=${var.domain_name}
     EOT
 
     # 5. Update Caddyfile with real domain

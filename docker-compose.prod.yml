@@ -16,31 +16,22 @@ services:
     networks:
       - life-io-net
 
+
   life-io-backend:
     build:
       context: .
       dockerfile: Dockerfile
-      # ✅ NEW: Pass the variable to the build context
       args:
         VITE_ROOT_DOMAIN: ${VITE_ROOT_DOMAIN}
     restart: always
+    # ✅ ADD THIS: This tells Docker to load the entire .env file into the container
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD}@postgres:5432/main
-      # S3 / R2 Config
-      - BUCKET_NAME=${BUCKET_NAME}
-      - PUBLIC_AVATAR_URL=${PUBLIC_AVATAR_URL}
-      - AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      # Auth
-      - JWT_SECRET=${JWT_SECRET}
-      # Logging
-      - LOGTAIL_SOURCE_TOKEN=${LOGTAIL_SOURCE_TOKEN}
       - LOG_LEVEL=info
-      # ✅ NEW: Pass it to runtime as well (optional for backend, good for consistency)
-      - VITE_ROOT_DOMAIN=${VITE_ROOT_DOMAIN}
+      # You can remove the individual VAPID/GEMINI lines now as env_file handles them
     depends_on:
       postgres:
         condition: service_healthy

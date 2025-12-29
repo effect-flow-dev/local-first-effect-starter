@@ -62,3 +62,23 @@ variable "git_repo" {
   type        = string
   default     = "https://github.com/effect-flow-dev/local-first-effect-starter.git"
 }
+
+# --- AI/Gemini ---
+variable "gemini_api_key" {
+  type      = string
+  sensitive = true
+}
+
+# --- Push Notifications ---
+variable "vapid_public_key" {
+  type = string
+}
+
+variable "vapid_private_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "vapid_subject" {
+  type = string
+}
