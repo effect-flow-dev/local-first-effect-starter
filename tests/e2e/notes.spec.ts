@@ -10,7 +10,10 @@ test.describe("Notes & Sync Core", () => {
   });
 
   test.afterAll(async () => {
-    await cleanupUser(user.userId);
+    // ✅ FIX: Check if user exists before cleanup
+    if (user) {
+      await cleanupUser(user.userId);
+    }
   });
 
   test.beforeEach(async ({ page }) => {

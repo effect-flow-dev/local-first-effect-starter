@@ -177,4 +177,44 @@ describe("Counters & Atomic Increments (Integration)", () => {
       })
     );
   });
+
+  it("should initialize and increment a missing field (COALESCE check)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const userId = schemaUserId;
+        const noteId = randomUUID() as NoteId;
+        const blockId = randomUUID() as BlockId;
+
+        // 1. Setup: Block WITHOUT 'score' field
+        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "Null Test" });
+        yield* handleCreateBlock(db, {
+          noteId,
+          blockId,
+          type: "tiptap_text", // ✅ FIX: Use a valid type that allows free-form fields
+          fields: {}, // Empty fields
+        }, userId);
+
+        // 2. Push Increment on 'score' (+10)
+        const push: PushRequest = {
+          clientGroupID: "cg-null",
+          mutations: [{
+            id: 1,
+            clientID: "c-null",
+            name: "incrementCounter",
+            args: { blockId, key: "score", delta: 10, version: 1 },
+          }],
+        };
+
+        yield* handlePush(push, { ...mockUser, id: userId }, db, "OWNER");
+
+        // 3. Verify 'score' was created and set to 10 (0 + 10)
+        const block = yield* Effect.promise(() =>
+            db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
+        );
+        
+        // @ts-expect-error jsonb access
+        expect(block.fields.score).toBe(10);
+      })
+    );
+  });
 });

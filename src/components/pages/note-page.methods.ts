@@ -108,6 +108,13 @@ export const handleLinkHoverEnd = (component: NotePage) => {
   component.dispatch({ type: "PREVIEW_HOVER_END" });
 };
 
+// Interface for traversing the Note content to find alerts
+interface ContentNode {
+    type: string;
+    attrs?: Record<string, unknown>;
+    content?: ContentNode[];
+}
+
 export const initializeState = (component: NotePage) => {
   component["_replicacheUnsubscribe"]?.();
   component.dispatch({ type: "INITIALIZE_START" });
@@ -172,6 +179,56 @@ export const initializeState = (component: NotePage) => {
              }
           }
           blocks.sort((a, b) => a.order - b.order);
+
+          // ✅ FIX: Inject Synthetic Alert Blocks from Note Content
+          // Conflict alerts exist in the JSON tree (note.content) but not in the block table.
+          // We need to merge them into the `blocks` array for rendering.
+          const content = note.content as unknown as ContentNode;
+          
+          if (content && content.content) {
+              const traverse = (nodes: ContentNode[]) => {
+                  for (let i = 0; i < nodes.length; i++) {
+                      const node = nodes[i];
+                      
+                      // Check for Alert Block
+                      if (node?.type === "alertBlock") {
+                          // Find position relative to the previous block if possible
+                          const prevNode = nodes[i - 1];
+                          let insertIndex = -1;
+                          
+                          if (prevNode && prevNode.attrs?.blockId) {
+                              const prevId = prevNode.attrs.blockId as string;
+                              const foundIdx = blocks.findIndex(b => b.id === prevId);
+                              if (foundIdx !== -1) insertIndex = foundIdx + 1;
+                          }
+                          
+                          // Create Synthetic Block
+                          const alertBlock: AppBlock = {
+                              id: `alert-${Date.now()}-${i}` as BlockId,
+                              note_id: note.id,
+                              user_id: note.user_id,
+                              type: "alert", // Special type
+                              content: (node.attrs?.message as string) || "Alert",
+                              fields: { level: node.attrs?.level },
+                              // Dummy values for required fields
+                              tags: [], links: [], transclusions: [], file_path: "", 
+                              parent_id: null, depth: 0, order: 0, version: 0, 
+                              created_at: new Date(), updated_at: new Date()
+                          };
+
+                          if (insertIndex !== -1) {
+                              blocks.splice(insertIndex, 0, alertBlock);
+                          } else {
+                              // Fallback: Add to top if context lost
+                              blocks.unshift(alertBlock);
+                          }
+                      }
+                      
+                      if (node?.content) traverse(node.content);
+                  }
+              };
+              traverse(content.content);
+          }
 
           return { note, allNotes, blocks };
         });

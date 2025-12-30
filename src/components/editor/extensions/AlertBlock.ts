@@ -55,6 +55,17 @@ class AlertBlockNodeView implements NodeView {
     }
   }
 
+  private _handleViewHistory = (e: MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // Dispatch bubbling event to be caught by NotePage
+    this.dom.dispatchEvent(new CustomEvent("view-history-request", {
+      bubbles: true,
+      composed: true
+    }));
+  };
+
   private render() {
     const attrs = this.node.attrs as unknown as AlertAttributes;
     const level = attrs.level || "warning";
@@ -76,10 +87,24 @@ class AlertBlockNodeView implements NodeView {
       </svg>
     `;
 
-    // Content
+    // Content Container (Flex Column)
     const contentWrapper = document.createElement("div");
-    contentWrapper.className = "flex-1 text-sm font-medium leading-relaxed";
-    contentWrapper.textContent = message;
+    contentWrapper.className = "flex-1 flex flex-col gap-2";
+
+    // Text Message
+    const textDiv = document.createElement("div");
+    textDiv.className = "text-sm font-medium leading-relaxed";
+    textDiv.textContent = message;
+    contentWrapper.appendChild(textDiv);
+
+    // Action Button (Only for Conflicts/Errors)
+    if (level === "error") {
+      const btn = document.createElement("button");
+      btn.className = "self-start px-3 py-1.5 bg-white border border-red-200 text-red-700 text-xs font-semibold rounded hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-1 transition-colors";
+      btn.textContent = "View Version History";
+      btn.onclick = this._handleViewHistory;
+      contentWrapper.appendChild(btn);
+    }
 
     this.dom.innerHTML = "";
     this.dom.appendChild(iconWrapper);
@@ -88,8 +113,14 @@ class AlertBlockNodeView implements NodeView {
 
   update(node: ProseMirrorNode) {
     if (node.type !== this.node.type) return false;
-    this.node = node;
-    this.render();
+    // Check if attributes changed before re-rendering
+    if (
+      node.attrs.level !== this.node.attrs.level || 
+      node.attrs.message !== this.node.attrs.message
+    ) {
+      this.node = node;
+      this.render();
+    }
     return true;
   }
 }

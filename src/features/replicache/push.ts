@@ -1,5 +1,5 @@
 // FILE: src/features/replicache/push.ts
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Exit, Cause } from "effect";
 import { TreeFormatter, type ParseError } from "effect/ParseResult";
 import { sql, type Kysely } from "kysely";
 import type { Database } from "../../types";
@@ -37,22 +37,9 @@ import {
 import { PushError } from "./Errors";
 import { NoteDatabaseError, VersionConflictError } from "../note/Errors";
 import { hasPermission, PERMISSIONS, type Role, type Permission } from "../../lib/shared/permissions";
-import { injectConflictAlert } from "../note/utils/content-traversal"; // ✅ IMPORTED
+import { injectConflictAlert, type ContentNode } from "../note/utils/content-traversal"; 
 
 
-interface GenericTiptapNode {
-  type: string;
-  attrs?: {
-    blockId?: string;
-    level?: string;
-    message?: string;
-    [key: string]: unknown;
-  };
-  content?: GenericTiptapNode[];
-  [key: string]: unknown;
-}
-
-// Map mutations to required permissions
 const MUTATION_PERMISSIONS: Record<string, Permission> = {
     createNote: PERMISSIONS.NOTE_CREATE,
     updateNote: PERMISSIONS.NOTE_EDIT,
@@ -109,6 +96,9 @@ export const handlePush = (
           for (const mutation of req.mutations) {
             const { clientID, id: mutationID, name, args } = mutation;
 
+            // ✅ DEBUG LOG: Track incoming mutations to confirm flow
+            console.info(`[Push] Processing mutation ${name} (ID: ${mutationID}) from ${clientID}`);
+
             let clientState = await trx
               .selectFrom("replicache_client")
               .selectAll()
@@ -137,9 +127,12 @@ export const handlePush = (
             const lastMutationID = clientState.last_mutation_id ?? 0;
             const expectedID = lastMutationID + 1;
 
-            if (mutationID < expectedID) continue;
+            if (mutationID < expectedID) {
+              console.info(`[Push] Skipping duplicate mutation ${mutationID} (Current: ${lastMutationID})`);
+              continue;
+            }
             if (mutationID > expectedID) {
-              console.warn(`Mutation ${mutationID} from future? Expected ${expectedID}. Skipping/Gap.`);
+              console.warn(`[Push] Future mutation ${mutationID}? Expected ${expectedID}. Skipping/Gap.`);
               continue; 
             }
 
@@ -202,22 +195,34 @@ export const handlePush = (
               }
             });
 
-            try {
-                await Effect.runPromise(effectToRun);
-            } catch (err: unknown) {
-                if (err instanceof VersionConflictError) {
+            // ✅ FIX: Use runPromiseExit to properly catch and unwrap Effect errors (Fail/Die/Interrupt)
+            const exit = await Effect.runPromiseExit(effectToRun);
+
+            if (Exit.isFailure(exit)) {
+                // Unwrap the cause to get the actual error object
+                const actualError = Cause.squash(exit.cause);
+
+                if (
+                  actualError instanceof VersionConflictError || 
+                  (typeof actualError === 'object' && actualError !== null && (actualError as { _tag?: unknown })._tag === 'VersionConflictError')
+                ) {
+                    // Safe cast
+                    const conflictError = actualError as VersionConflictError;
                     console.warn(`[Push] Version Conflict detected for ${name}. Injecting alert...`);
                     
                     const conflictResolution = Effect.gen(function*() {
                         const blockRow = yield* Effect.tryPromise({
                           try: () => trx.selectFrom("block")
                               .select(["note_id", "fields"])
-                              .where("id", "=", err.blockId as BlockId)
+                              .where("id", "=", conflictError.blockId as BlockId)
                               .executeTakeFirst(),
                           catch: (e) => new NoteDatabaseError({ cause: e }),
                         });
 
-                        if (!blockRow || !blockRow.note_id) return;
+                        if (!blockRow || !blockRow.note_id) {
+                            console.error(`[Push] Conflict resolution aborted: Block ${conflictError.blockId} not found.`);
+                            return;
+                        }
 
                         const noteRow = yield* Effect.tryPromise({
                           try: () => trx.selectFrom("note")
@@ -227,14 +232,26 @@ export const handlePush = (
                           catch: (e) => new NoteDatabaseError({ cause: e }),
                         });
 
-                        if (!noteRow || !noteRow.content) return;
+                        if (!noteRow || !noteRow.content) {
+                            console.error(`[Push] Conflict resolution aborted: Note content missing for ${blockRow.note_id}.`);
+                            return;
+                        }
 
-                        const message = `Sync Conflict: Server v${err.expectedVersion} vs Your v${err.actualVersion}`;
+                        const message = `Sync Conflict: Server v${conflictError.expectedVersion} vs Your v${conflictError.actualVersion}`;
                         
-                        const content = JSON.parse(JSON.stringify(noteRow.content)) as GenericTiptapNode;
+                        // Robustly handle string vs object for content
+                        const rawContent = noteRow.content;
+                        // ✅ FIX: Cast rawContent using unknown for type safety
+                        const contentObj = (typeof rawContent === 'string' 
+                            ? JSON.parse(rawContent) 
+                            : rawContent) as unknown;
                         
-                        // Use Shared Injector
-                        if (injectConflictAlert(content, err.blockId, message)) {
+                        const content = JSON.parse(JSON.stringify(contentObj)) as ContentNode;
+                        
+                        // ✅ DEBUG LOG
+                        console.info(`[Push] Injecting alert into note ${blockRow.note_id} for conflict on block ${conflictError.blockId}`);
+
+                        if (injectConflictAlert(content, conflictError.blockId, message)) {
                              const res = yield* Effect.tryPromise({
                                  try: async () => {
                                      const result = await sql<{ nextval: string }>`select nextval('global_version_seq')`.execute(trx);
@@ -253,6 +270,9 @@ export const handlePush = (
                                 }).where("id", "=", blockRow.note_id!).execute(),
                                 catch: (e) => new NoteDatabaseError({ cause: e })
                              });
+                             console.info(`[Push] Alert injected successfully. Note version bumped to ${newTick}`);
+                        } else {
+                            console.warn(`[Push] injectConflictAlert returned false. Block ${conflictError.blockId} not found in content tree.`);
                         }
                     });
 
@@ -260,12 +280,10 @@ export const handlePush = (
                         Effect.catchAll(e => Effect.logError("Conflict resolution failed", e))
                     ));
 
-                } else if (isParseError(err)) {
-                    console.error(`[Push] Schema Validation Failed for ${name}:`, Effect.runSync(TreeFormatter.formatError(err)));
-                } else if (err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === '(FiberFailure) ParseError') {
-                    console.error(`[Push] Schema Validation Failed for ${name} (FiberFailure):`, JSON.stringify(err, null, 2));
+                } else if (isParseError(actualError)) {
+                    console.error(`[Push] Schema Validation Failed for ${name}:`, Effect.runSync(TreeFormatter.formatError(actualError)));
                 } else {
-                    console.error(`[Push] Poison Pill caught! Mutation ${name} (ID: ${mutationID}) failed. Consuming error to unblock queue.`, err);
+                    console.error(`[Push] Poison Pill caught! Mutation ${name} (ID: ${mutationID}) failed. Consuming error to unblock queue.`, actualError);
                 }
             }
 

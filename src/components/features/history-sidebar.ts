@@ -26,13 +26,14 @@ export class HistorySidebar extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    // ✅ FIX: Ensure host doesn't block layout or appear as 0x0
+    this.style.display = "contents";
+    
     this._disposeEffect = effect(() => {
-      // Access signals to track dependencies
       void isHistoryOpen.value;
       void historyEntries.value;
       void isLoadingHistory.value;
       
-      // Clear preview when sidebar closes
       if (!isHistoryOpen.value) {
         this._previewEntryId = null;
       }
@@ -96,7 +97,6 @@ export class HistorySidebar extends LitElement {
     }
 
     if (mutationType === "updateNote") {
-      // Prioritize title change description
       if (typeof d.title === "string" && d.title) {
         return `Renamed to "${d.title}"`;
       }
@@ -106,7 +106,6 @@ export class HistorySidebar extends LitElement {
     return mutationType;
   }
 
-  // Handle restoring specific block changes
   private _handleRestoreBlock(e: Event, entry: HistoryEntry) {
     e.stopPropagation();
     
@@ -144,11 +143,9 @@ export class HistorySidebar extends LitElement {
       })
     );
 
-    // ✅ FIX: Close history sidebar and preview upon restoration
     closeHistory();
   }
 
-  // Handle restoring Note-level changes (title/content)
   private _handleRestoreNote(e: Event, entry: HistoryEntry) {
     e.stopPropagation();
 
@@ -173,7 +170,6 @@ export class HistorySidebar extends LitElement {
       })
     );
     
-    // ✅ FIX: Close history sidebar and preview upon restoration
     this._previewEntryId = null;
     closeHistory();
   }
@@ -200,7 +196,6 @@ export class HistorySidebar extends LitElement {
     if (args.content) {
         try {
             previewText = convertTiptapToMarkdown(args.content);
-            // Allow longer preview in the dedicated panel
             if (previewText.length > 5000) previewText = previewText.slice(0, 5000) + "...";
         } catch {
             previewText = "(Complex content)";
@@ -273,7 +268,6 @@ export class HistorySidebar extends LitElement {
         @click=${closeHistory}
       ></div>
 
-      <!-- Preview Panel (Rendered as sibling, conditionally) -->
       ${isOpen && this._previewEntryId ? this._renderPreviewPanel() : nothing}
 
       <div 

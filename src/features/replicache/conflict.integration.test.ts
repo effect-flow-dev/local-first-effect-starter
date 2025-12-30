@@ -155,11 +155,9 @@ describe("Conflict Resolution (Trojan Horse)", () => {
           created_at: new Date(),
           avatar_url: null,
           permissions: [],
-          // ✅ FIX: Removed tenant_strategy, database_name, subdomain
         };
 
         // --- 4. EXECUTE PUSH ---
-        // ✅ FIX: Added "OWNER" role
         yield* handlePush(stalePush, mockUser, db, "OWNER");
 
         // --- 5. VERIFICATIONS ---
@@ -178,6 +176,24 @@ describe("Conflict Resolution (Trojan Horse)", () => {
 
         expect(rejectedEntry.was_rejected).toBe(true);
         expect(JSON.stringify(rejectedEntry.change_delta)).toContain("done");
+
+        // B. Verify Note Content now contains AlertBlock
+        const note = yield* Effect.promise(() =>
+            db.selectFrom("note").select("content").where("id", "=", noteId).executeTakeFirstOrThrow()
+        );
+        
+        // Handle content whether it's string (JSON) or object
+        const content = typeof note.content === 'string' 
+            ? JSON.parse(note.content) 
+            : note.content as any;
+            
+        const nodes = content.content || [];
+        
+        const alertNode = nodes.find((n: any) => n.type === "alertBlock");
+        
+        expect(alertNode).toBeDefined();
+        expect(alertNode.attrs.level).toBe("error");
+        expect(alertNode.attrs.message).toContain("Sync Conflict");
       })
     );
   });

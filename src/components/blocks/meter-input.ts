@@ -18,6 +18,7 @@ export class MeterInput extends LitElement {
   @state() private _error: string | null = null;
 
   private _debounceTimer?: ReturnType<typeof setTimeout>;
+  private _debounceBaseline: number | null = null; // Tracks value at start of typing burst
 
   protected override createRenderRoot() {
     return this;
@@ -25,8 +26,11 @@ export class MeterInput extends LitElement {
 
   override willUpdate(changedProperties: Map<string, unknown>) {
     if (changedProperties.has("value")) {
-      this._localValue = this.value;
-      this._validate();
+      // Only sync from props if we are NOT currently typing (debouncing)
+      if (this._debounceBaseline === null) {
+        this._localValue = this.value;
+        this._validate();
+      }
     }
   }
 
@@ -42,6 +46,9 @@ export class MeterInput extends LitElement {
 
   private _handleChange(delta: number) {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
+    // If we interrupt a typing session with a button click, flush pending?
+    // For simplicity, button clicks are immediate atomic ops.
+    this._debounceBaseline = null; 
     
     // Avoid floating point precision errors
     const nextVal = this._localValue + delta;
@@ -66,20 +73,42 @@ export class MeterInput extends LitElement {
   private _handleInput = (e: Event) => {
     const val = parseFloat((e.target as HTMLInputElement).value);
     if (!isNaN(val)) {
+      // 1. Capture Baseline on first keystroke of a burst
+      if (this._debounceBaseline === null) {
+        this._debounceBaseline = this._localValue;
+      }
+
+      // 2. Update Local State (Immediate UI Feedback)
       this._localValue = val;
       this._validate();
       this.requestUpdate();
       
+      // 3. Debounce the Atomic Commit
       if (this._debounceTimer) clearTimeout(this._debounceTimer);
+      
       this._debounceTimer = setTimeout(() => {
-        runClientUnscoped(clientLog("debug", `[Meter] Emitting value ${this._localValue}`));
-        this.dispatchEvent(
-            new CustomEvent("update-block", {
-            bubbles: true,
-            composed: true,
-            detail: { blockId: this.blockId, fields: { value: this._localValue } },
-            })
-        );
+        // Calculate the total change since the start of this typing burst
+        const baseline = this._debounceBaseline ?? this._localValue;
+        const totalDelta = this._localValue - baseline;
+
+        if (totalDelta !== 0) {
+            runClientUnscoped(clientLog("debug", `[Meter] Emitting atomic input delta: ${totalDelta} (from ${baseline} to ${this._localValue})`));
+            
+            this.dispatchEvent(
+                new CustomEvent("increment-block", {
+                    bubbles: true,
+                    composed: true,
+                    detail: { 
+                        blockId: this.blockId, 
+                        key: "value", 
+                        delta: totalDelta 
+                    },
+                })
+            );
+        }
+        
+        // Reset baseline to allow new syncs/typing bursts
+        this._debounceBaseline = null;
       }, 500);
     }
   };

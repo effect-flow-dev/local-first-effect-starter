@@ -49,6 +49,12 @@ export const getTenantConnection = (dbName: string): Kysely<Database> => {
     dialect,
     log: (event) => {
       if (event.level === "error") {
+        // ✅ FIX: Ignore "relation does not exist" (42P01) errors.
+        // These occur frequently during the race condition between Tenant Creation 
+        // and Schema Provisioning when the AlertWorker scans.
+        const error = event.error as { code?: string };
+        if (error?.code === "42P01") return;
+
         console.error(`[DB Error - ${dbName}]`, event.error);
       }
     },

@@ -22,7 +22,7 @@ const mockQueryBuilder = {
   values: vi.fn().mockReturnThis(),
   returning: vi.fn().mockReturnThis(),
   set: vi.fn().mockReturnThis(),
-  orderBy: vi.fn().mockReturnThis(), // ✅ Added
+  orderBy: vi.fn().mockReturnThis(),
   execute: mockExecute,
   executeTakeFirst: mockExecuteTakeFirst,
   executeTakeFirstOrThrow: mockExecuteTakeFirstOrThrow,
@@ -42,20 +42,24 @@ describe("handleUpdateBlock Mutation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecute.mockResolvedValue([]);
-    // Default audit log success
     mockExecuteTakeFirstOrThrow.mockResolvedValue({ id: "history-1" });
-    // Default: No block found initially unless specified
     mockExecuteTakeFirst.mockResolvedValue(undefined);
   });
 
   it("correctly merges new fields into existing block attributes in Note content", async () => {
-    // 1. Resolve Block (selectFrom block)
-    mockExecuteTakeFirst.mockResolvedValueOnce({ note_id: NOTE_ID, version: 1 });
-    
-    // 2. Check Recent History (selectFrom block_history) -> undefined (new session)
-    mockExecuteTakeFirst.mockResolvedValueOnce(undefined);
+    // Flow:
+    // 1. Resolve Block (selectFrom block) -> Returns info
+    // 2. logBlockHistory (insertInto block_history)
+    // 3. Resolve Note (selectFrom note) -> Returns content
+    // 4. Update Note (updateTable note)
+    // 5. Update Block (updateTable block)
 
-    // 3. Note Content (selectFrom note)
+    // 1. Block Lookup
+    mockExecuteTakeFirst.mockResolvedValueOnce({ note_id: NOTE_ID, version: 1, type: "interactiveBlock", fields: {} });
+    
+    // 2. History (mockExecuteTakeFirstOrThrow handles this, does not consume from mockExecuteTakeFirst stack)
+
+    // 3. Note Lookup
     const existingContent = {
       type: "doc",
       content: [
@@ -71,9 +75,11 @@ describe("handleUpdateBlock Mutation", () => {
     };
     mockExecuteTakeFirst.mockResolvedValueOnce({ id: NOTE_ID, content: existingContent });
 
-    // 4. Updates
-    mockExecute.mockResolvedValueOnce([{ updated_at: new Date() }]); // Note Update
-    mockExecute.mockResolvedValueOnce([]); // Block Update
+    // 4. Update Note Execution
+    mockExecute.mockResolvedValueOnce([]); 
+
+    // 5. Update Block Execution
+    mockExecute.mockResolvedValueOnce([]);
 
     await Effect.runPromise(
       handleUpdateBlock(
@@ -87,9 +93,11 @@ describe("handleUpdateBlock Mutation", () => {
       )
     );
 
-    // Verify calls
+    // Verify updates
     expect(mockDb.updateTable).toHaveBeenCalledWith("note");
+    expect(mockDb.updateTable).toHaveBeenCalledWith("block");
     
+    // Check Note Update Content
     const setCalls = mockQueryBuilder.set.mock.calls;
     // Find the call that updates content (the Note update)
     const noteUpdateArgs = setCalls.find((args: any[]) => args[0].content)?.[0];
@@ -100,7 +108,7 @@ describe("handleUpdateBlock Mutation", () => {
   });
 
   it("is idempotent if the block record does not exist (note lookup fails)", async () => {
-    // 1. Resolve Block -> returns undefined (Not Found)
+    // 1. Resolve Block -> Returns undefined
     mockExecuteTakeFirst.mockResolvedValueOnce(undefined);
 
     await Effect.runPromise(
@@ -114,7 +122,8 @@ describe("handleUpdateBlock Mutation", () => {
     // It should try to select the block
     expect(mockDb.selectFrom).toHaveBeenCalledWith("block");
     
-    // But since it wasn't found, it shouldn't try to update anything
+    // It should NOT proceed to update tables
     expect(mockDb.updateTable).not.toHaveBeenCalled();
+    expect(mockDb.insertInto).not.toHaveBeenCalled(); // No history created
   });
 });

@@ -37,8 +37,13 @@ export const centralDb = new Kysely<Database>({
   log: (event) => {
     if (event.level === "error") {
       const error = event.error as PgError;
-      // Ignore "database already exists" error during provisioning
+      // Ignore "database already exists" (42P04) during provisioning
       if (error?.code === "42P04") return;
+      
+      // ✅ FIX: Ignore "relation does not exist" (42P01) 
+      // This happens when AlertWorker scans a tenant whose schema is being created/deleted.
+      if (error?.code === "42P01") return;
+
       console.error("[DB Error]", event.error);
     }
   },

@@ -68,10 +68,12 @@ export const createVerifiedUser = async () => {
   const tenantId = randomUUID() as TenantId;
 
   const subdomain = `test-e2e-${userId.slice(0,8)}`;
-  const schemaName = `tenant_${tenantId.replace(/-/g, "")}`;
 
   const argon2id = new Argon2id();
   const hashedPassword = await argon2id.hash(password);
+
+  // ✅ FIX: Provision Schema FIRST.
+  const schemaName = await provisionSchema(tenantId);
 
   await db.transaction().execute(async (trx) => {
       await trx.insertInto("consultancy").values({ id: consultancyId, name: "E2E Corp", created_at: new Date() }).execute();
@@ -104,8 +106,6 @@ export const createVerifiedUser = async () => {
       }).execute();
   });
 
-  await provisionSchema(tenantId);
-
   return { email, password, userId, tenantId, subdomain };
 };
 
@@ -127,6 +127,11 @@ export const createMultiTenantUser = async () => {
   const subB = `site-b-${randomUUID().slice(0, 6)}`;
   const subC = `site-c-${randomUUID().slice(0, 6)}`;
 
+  // ✅ FIX: Provision Schemas FIRST
+  const schemaA = await provisionSchema(siteAId);
+  const schemaB = await provisionSchema(siteBId);
+  const schemaC = await provisionSchema(siteCId);
+
   await db.transaction().execute(async (trx) => {
       // 1. User & Consultancy
       await trx.insertInto("consultancy").values({ id: consultancyId, name: "MultiTenant Corp", created_at: new Date() }).execute();
@@ -147,7 +152,7 @@ export const createMultiTenantUser = async () => {
           name: "Site A",
           subdomain: subA,
           tenant_strategy: "schema",
-          schema_name: `tenant_${siteAId.replace(/-/g, "")}`,
+          schema_name: schemaA,
           created_at: new Date()
       }).execute();
       
@@ -160,7 +165,7 @@ export const createMultiTenantUser = async () => {
           name: "Site B",
           subdomain: subB,
           tenant_strategy: "schema",
-          schema_name: `tenant_${siteBId.replace(/-/g, "")}`,
+          schema_name: schemaB,
           created_at: new Date()
       }).execute();
       
@@ -173,15 +178,10 @@ export const createMultiTenantUser = async () => {
           name: "Site C",
           subdomain: subC,
           tenant_strategy: "schema",
-          schema_name: `tenant_${siteCId.replace(/-/g, "")}`,
+          schema_name: schemaC,
           created_at: new Date()
       }).execute();
   });
-
-  // Provision physical schemas for all (so 403 is pure auth, not 404/500)
-  await provisionSchema(siteAId);
-  await provisionSchema(siteBId);
-  await provisionSchema(siteCId);
 
   return {
       email,

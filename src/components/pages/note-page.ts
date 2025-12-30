@@ -62,7 +62,7 @@ interface MeterFields {
     min: number; 
     max: number; 
     unit: string;
-    validation_status?: string; // ✅ Added validation status
+    validation_status?: string; 
 }
 interface MapFields { zoom?: number; style?: string; }
 interface TiptapTextFields { content: TiptapDoc; }
@@ -349,6 +349,31 @@ export class NotePage extends LitElement {
     }
 
     private _renderBlock(block: AppBlock) {
+        // Handle Synthetic Alert Blocks
+        if (block.type === 'alert') {
+            // ✅ FIX: Safely access fields without 'any'
+            const fields = block.fields as { level?: string } | undefined;
+            // Unused var prefixed with _ to silence linter
+            const _level = fields?.level || 'warning';
+            
+            return html`
+                <div class="alert-block p-4 my-4 rounded-md bg-red-50 border-l-4 border-red-500 text-red-800 flex items-center justify-between" data-block-id="${block.id}">
+                    <div class="flex items-center gap-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span class="text-sm font-medium">${block.content}</span>
+                    </div>
+                    <button 
+                        class="px-3 py-1.5 bg-white border border-red-200 text-red-700 text-xs font-semibold rounded hover:bg-red-50 transition-colors"
+                        @click=${this._handleOpenHistory}
+                    >
+                        View Version History
+                    </button>
+                </div>
+            `;
+        }
+
         const presence = presenceState.value[block.id] || [];
         const currentUserId = authState.value.user?.id;
         const activeRemoteUser = presence.find(u => u.userId !== currentUserId);
@@ -370,7 +395,6 @@ export class NotePage extends LitElement {
                 break;
             }
             case 'form_meter': {
-                // ✅ Pass validation_status to display visual warnings
                 const fields = block.fields as MeterFields;
                 content = html`
                     <meter-input
@@ -421,6 +445,7 @@ export class NotePage extends LitElement {
                         @click=${this._handleEditorClick}
                         @link-hover=${this._handleLinkHover}
                         @link-hover-end=${this._handleLinkHoverEnd}
+                        @view-history-request=${this._handleOpenHistory} 
                     ></tiptap-editor>`;
                 break;
             }

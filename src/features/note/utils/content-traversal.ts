@@ -1,6 +1,6 @@
 // FILE: src/features/note/utils/content-traversal.ts
 
-interface ContentNode {
+export interface ContentNode {
   type: string;
   attrs?: {
     blockId?: string;
@@ -42,7 +42,7 @@ export function updateBlockInContent(
     content: ContentNode | undefined, 
     blockId: string, 
     newFields: Record<string, unknown>,
-    validationWarning?: string // ✅ NEW: Optional warning message
+    validationWarning?: string 
 ): boolean {
   if (!content || !content.content || !Array.isArray(content.content)) return false;
   const nodes = content.content;
@@ -91,7 +91,6 @@ export function updateBlockInContent(
                   attrs: {
                       level: "warning",
                       message: validationWarning,
-                      // We don't link blockId to alert to avoid it being treated as the block itself
                   }
               };
               nodes.splice(i + 1, 0, alertNode);
@@ -107,7 +106,6 @@ export function updateBlockInContent(
   return updated;
 }
 
-// ✅ NEW: Standalone injector for Conflicts
 export function injectConflictAlert(
   content: ContentNode,
   targetBlockId: string,
@@ -129,6 +127,7 @@ export function injectConflictAlert(
           message,
         },
       };
+      // Insert AFTER the conflicted block
       nodes.splice(i + 1, 0, alertNode);
       return true;
     }

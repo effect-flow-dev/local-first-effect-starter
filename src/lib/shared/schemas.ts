@@ -152,44 +152,6 @@ export type TiptapHeadingNode = Schema.Schema.Type<
   typeof TiptapHeadingNodeSchema
 >;
 
-export interface TiptapListItemNode {
-  readonly type: "listItem";
-  readonly attrs?: { readonly blockId?: string; readonly version?: number };
-  readonly content: ReadonlyArray<
-    TiptapParagraphNode | TiptapBulletListNode | TiptapHeadingNode
-  >;
-}
-
-export interface TiptapBulletListNode {
-  readonly type: "bulletList";
-  readonly attrs?: { readonly blockId?: string; readonly version?: number };
-  readonly content: ReadonlyArray<TiptapListItemNode>;
-}
-
-const TiptapListItemNodeSchema: Schema.Schema<TiptapListItemNode> =
-  Schema.suspend(() =>
-    Schema.Struct({
-      type: Schema.Literal("listItem"),
-      attrs: Schema.optional(StableBlockAttrs),
-      content: Schema.Array(
-        Schema.Union(
-          TiptapParagraphNodeSchema,
-          TiptapBulletListNodeSchema,
-          TiptapHeadingNodeSchema,
-        ),
-      ),
-    }),
-  );
-
-const TiptapBulletListNodeSchema: Schema.Schema<TiptapBulletListNode> =
-  Schema.suspend(() =>
-    Schema.Struct({
-      type: Schema.Literal("bulletList"),
-      attrs: Schema.optional(StableBlockAttrs),
-      content: Schema.Array(TiptapListItemNodeSchema),
-    }),
-  );
-
 const BlockIdTransformSchema = Schema.transform(Schema.String, BlockIdSchema, {
   decode: (s) => s as BlockId,
   encode: (id) => id,
@@ -203,6 +165,7 @@ export const TaskStatusSchema = Schema.Union(
 );
 export type TaskStatus = Schema.Schema.Type<typeof TaskStatusSchema>;
 
+// Forward declaration needed for recursive types
 const InteractiveBlockSchema = Schema.Struct({
   type: Schema.Literal("interactiveBlock"),
   attrs: Schema.Struct({
@@ -212,7 +175,7 @@ const InteractiveBlockSchema = Schema.Struct({
         Schema.Literal("task"), 
         Schema.Literal("image"), 
         Schema.Literal("form_checklist"), 
-        Schema.Literal("form_meter"),
+        Schema.Literal("form_meter"), 
         Schema.Literal("map_block"),
         Schema.Literal("tiptap_text")
     ),
@@ -232,10 +195,12 @@ const InteractiveBlockSchema = Schema.Struct({
       label: Schema.optional(Schema.String),
       zoom: Schema.optional(Schema.Number),
       style: Schema.optional(Schema.String),
+      validation_status: Schema.optional(Schema.String), 
     }),
   }),
   content: Schema.optional(Schema.Array(TiptapTextNodeSchema)),
 });
+
 export type InteractiveBlock = Schema.Schema.Type<
   typeof InteractiveBlockSchema
 >;
@@ -253,6 +218,51 @@ export const AlertBlockSchema = Schema.Struct({
   }),
 });
 export type AlertBlock = Schema.Schema.Type<typeof AlertBlockSchema>;
+
+// Fix ListItem Schema to include Interactive/Alert blocks (nested structure support)
+export interface TiptapListItemNode {
+  readonly type: "listItem";
+  readonly attrs?: { readonly blockId?: string; readonly version?: number };
+  readonly content: ReadonlyArray<
+    TiptapParagraphNode | TiptapBulletListNode | TiptapHeadingNode | InteractiveBlock | AlertBlock
+  >;
+}
+
+export interface TiptapBulletListNode {
+  readonly type: "bulletList";
+  readonly attrs?: { readonly blockId?: string; readonly version?: number };
+  readonly content: ReadonlyArray<TiptapListItemNode>;
+}
+
+// ✅ FIX: Use 'any' for the Encoded type parameter to avoid Invariance check failures on recursive types
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TiptapListItemNodeSchema: Schema.Schema<TiptapListItemNode, any> =
+  Schema.suspend(() =>
+    Schema.Struct({
+      type: Schema.Literal("listItem"),
+      attrs: Schema.optional(StableBlockAttrs),
+      content: Schema.Array(
+        Schema.Union(
+          TiptapParagraphNodeSchema,
+          TiptapBulletListNodeSchema, // References the other recursive schema
+          TiptapHeadingNodeSchema,
+          InteractiveBlockSchema,
+          AlertBlockSchema
+        ),
+      ),
+    }),
+  );
+
+// ✅ FIX: Use 'any' for the Encoded type parameter here as well
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TiptapBulletListNodeSchema: Schema.Schema<TiptapBulletListNode, any> =
+  Schema.suspend(() =>
+    Schema.Struct({
+      type: Schema.Literal("bulletList"),
+      attrs: Schema.optional(StableBlockAttrs),
+      content: Schema.Array(TiptapListItemNodeSchema),
+    }),
+  );
 
 export type TiptapNode =
   | TiptapParagraphNode

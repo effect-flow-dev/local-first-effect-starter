@@ -30,17 +30,35 @@ describe("Block: MeterInput", () => {
     expect(errorMsg?.textContent).to.include("Exceeds Maximum");
   });
 
-  it("dispatches update-block event on stepper click", async () => {
+  it("dispatches increment-block event on stepper click", async () => {
     const el = await fixture<MeterInput>(html`
       <meter-input .blockId=${"m1"} .value=${10}></meter-input>
     `);
 
     const plusBtn = el.querySelector('button[aria-label="Increase"]') as HTMLElement;
     
-    // Click triggers debounce logic
+    // Click triggers immediate dispatch
     setTimeout(() => plusBtn.click());
 
-    const ev = await oneEvent(el, "update-block");
-    expect(ev.detail.fields.value).to.equal(11);
+    const ev = await oneEvent(el, "increment-block");
+    expect(ev.detail.key).to.equal("value");
+    expect(ev.detail.delta).to.equal(1);
+  });
+
+  it("dispatches increment-block (atomic delta) on text input", async () => {
+    const el = await fixture<MeterInput>(html`
+      <meter-input .blockId=${"m1"} .value=${10}></meter-input>
+    `);
+
+    const input = el.querySelector("input") as HTMLInputElement;
+    input.value = "15";
+    input.dispatchEvent(new Event("input"));
+
+    // Wait for debounce (500ms) + small buffer
+    const ev = await oneEvent(el, "increment-block");
+    
+    expect(ev.detail.key).to.equal("value");
+    // Initial 10 -> Input 15 = Delta 5
+    expect(ev.detail.delta).to.equal(5);
   });
 });
