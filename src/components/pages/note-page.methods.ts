@@ -20,7 +20,8 @@ import {
   type BlockId,
 } from "../../lib/shared/schemas";
 import type { NotePage } from "./note-page";
-import { TiptapEditor, convertTiptapToMarkdown } from "../editor/tiptap-editor";
+import { TiptapEditor } from "../editor/tiptap-editor";
+import { convertTiptapToMarkdown } from "../../lib/client/logic/markdown-transformer";
 import { clientLog } from "../../lib/client/clientLog";
 
 export const handleTitleKeyDown = (component: NotePage, e: KeyboardEvent) => {

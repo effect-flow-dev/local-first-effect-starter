@@ -5,11 +5,12 @@ import type { AppNote } from "../../lib/shared/schemas";
 import { NoteTaskUpdateError } from "../../lib/client/errors";
 
 // --- Mocks ---
-vi.mock("../editor/tiptap-editor", () => ({
+// We mock the transformer to return predictable results
+vi.mock("../../lib/client/logic/markdown-transformer", () => ({
   convertTiptapToMarkdown: vi.fn(
     (doc) => `# Mock Markdown for ${JSON.stringify(doc)}`
   ),
-  convertMarkdownToTiptap: vi.fn((text) => ({
+  convertMarkdownToTiptap: vi.fn((text: string) => ({
     type: "doc",
     content: [
       {

@@ -15,7 +15,7 @@ import {
 import type { HistoryEntry, TiptapDoc, NotebookId } from "../../lib/shared/schemas";
 import { ReplicacheService } from "../../lib/client/replicache";
 import { runClientUnscoped } from "../../lib/client/runtime";
-import { convertTiptapToMarkdown } from "../editor/tiptap-editor";
+import { convertTiptapToMarkdown } from "../../lib/client/logic/markdown-transformer";
 
 @customElement("history-sidebar")
 export class HistorySidebar extends LitElement {
