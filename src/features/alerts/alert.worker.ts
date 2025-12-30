@@ -124,7 +124,7 @@ export const scanAndAlert = Effect.gen(function* () {
 
 export const alertWorkerLive = pipe(
     scanAndAlert,
-    // Catch-all for the entire cycle to prevent the worker form dying permanently
-    Effect.catchAll(e => Effect.logError("[AlertWorker] Cycle failed", e)),
+    // ✅ FIX: Properly format the error message for logging.
+    Effect.catchAll(e => Effect.logError(`[AlertWorker] Cycle failed. Cause: ${e instanceof Error ? e.message : String(e)}`)),
     Effect.repeat(Schedule.spaced("1 minute"))
 );
