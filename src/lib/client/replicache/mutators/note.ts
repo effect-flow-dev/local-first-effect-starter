@@ -28,6 +28,7 @@ export const createNote = async (
     const now = new Date();
     const firstBlockId = args.initialBlockId || uuidv4();
 
+    // 1. Create the Note (Legacy content structure for compatibility)
     const emptyContent: TiptapDoc = {
         type: "doc",
         content: [
@@ -54,12 +55,39 @@ export const createNote = async (
         content: Schema.encodeSync(TiptapDocSchema)(newNote.content),
         created_at: newNote.created_at.toISOString(),
         updated_at: newNote.updated_at.toISOString(),
+        global_version: "0", // Optimistic
     };
 
-    await tx.set(
-        `note/${newNote.id}`,
-        jsonCompatibleNote as unknown as ReadonlyJSONValue,
-    );
+    // 2. Create the Initial Block (Crucial for Block-based Architecture)
+    // The UI relies on querying blocksByNoteId to render the editor.
+    // We use 'undefined' for optional fields so JSON.stringify strips them,
+    // which satisfies the Schema.optional() validator (missing key is OK, null is NOT).
+    const newBlock = {
+        id: firstBlockId,
+        note_id: args.id,
+        user_id: args.userID,
+        type: "tiptap_text", // Default type
+        content: "",
+        fields: {},
+        tags: [],
+        links: [],
+        transclusions: [],
+        file_path: "",
+        parent_id: null,
+        depth: 0,
+        order: 0,
+        version: 1,
+        created_at: now.toISOString(),
+        updated_at: now.toISOString(),
+        global_version: "0", // Optimistic
+        latitude: args.latitude,   // undefined if missing (stripped)
+        longitude: args.longitude, // undefined if missing (stripped)
+    };
+
+    // 3. Write to Replicache
+    await tx.set(`block/${firstBlockId}`, newBlock as unknown as ReadonlyJSONValue);
+    await tx.set(`note/${newNote.id}`, jsonCompatibleNote as unknown as ReadonlyJSONValue);
+    
     return jsonCompatibleNote as unknown as ReadonlyJSONValue;
 };
 
@@ -67,8 +95,8 @@ export const updateNote = async (
     tx: WriteTransaction,
     args: {
         id: NoteId;
-        title?: string; // ✅ Made Optional
-        content?: TiptapDoc; // ✅ Made Optional
+        title?: string;
+        content?: TiptapDoc; 
         notebookId?: NotebookId | null;
     },
 ) => {
@@ -88,8 +116,8 @@ export const updateNote = async (
 
         const updatedNote: AppNote = {
             ...note,
-            title: args.title ?? note.title,     // ✅ Merge existing if undefined
-            content: args.content ?? note.content, // ✅ Merge existing if undefined
+            title: args.title ?? note.title,
+            content: args.content ?? note.content,
             version: note.version + 1,
             updated_at: new Date(),
             notebook_id: nextNotebookId,
@@ -127,7 +155,17 @@ export const deleteNote = async (
     tx: WriteTransaction,
     { id }: { id: NoteId },
 ) => {
+    // 1. Delete the Note
     await tx.del(`note/${id}`);
+
+    // 2. Delete Associated Blocks (Cleanup)
+    // Scan all blocks belonging to this note using the index to prevent orphans
+    const blocks = await tx.scan({ indexName: "blocksByNoteId", prefix: id }).keys().toArray();
+    for (const key of blocks) {
+        // Index keys are [Secondary, Primary] -> [NoteId, BlockId]
+        const blockId = (key as unknown as [string, string])[1];
+        await tx.del(`block/${blockId}`);
+    }
 };
 
 export const revertNote = async (

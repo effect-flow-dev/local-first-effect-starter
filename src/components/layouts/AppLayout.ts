@@ -15,6 +15,7 @@ import "../features/language-switcher";
 import "./TabBar";
 import "./Sidebar";
 import "../ui/mobile-sidebar-backdrop";
+import "../ui/sync-status"; // ✅ Imported Sync Status
 
 @customElement("app-layout")
 export class AppLayout extends LitElement {
@@ -71,6 +72,9 @@ export class AppLayout extends LitElement {
 
     const loggedInNav = html`
       <div class="flex items-center gap-4">
+        <!-- ✅ Added Sync Status Indicator -->
+        <sync-status></sync-status>
+        
         <a
           href="/"
           @click=${this._handleLinkClick("/")}

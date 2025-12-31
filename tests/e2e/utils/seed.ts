@@ -29,11 +29,14 @@ const db = new Kysely<Database>({
 async function provisionSchema(tenantId: string) {
     const schemaName = `tenant_${tenantId.replace(/-/g, "")}`;
 
-    // 1. Create Schema
-    await sql`CREATE SCHEMA IF NOT EXISTS ${sql.ref(schemaName)}`.execute(db);
-
-    // 2. Run Migrations
+    // ✅ FIX: Perform Schema Creation AND Migration on the SAME connection.
+    // This prevents race conditions where one connection creates the schema
+    // but the next connection (used by migrator) doesn't see it immediately.
     await db.connection().execute(async (conn) => {
+      // 1. Create Schema
+      await sql`CREATE SCHEMA IF NOT EXISTS ${sql.ref(schemaName)}`.execute(conn);
+
+      // 2. Run Migrations (on the same connection that just created the schema)
       try {
           await sql`SET search_path TO ${sql.ref(schemaName)}, public`.execute(conn);
 

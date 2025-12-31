@@ -43,7 +43,8 @@ test.describe("Real-Time Sync (Multi-Client)", () => {
       
       const titleInput = page1.getByTestId("note-title-input");
       await titleInput.fill("Sync Note");
-      await expect(page1.locator("text=Saved")).toBeVisible();
+      // ✅ FIX: Use global sync status
+      await expect(page1.locator("sync-status")).toContainText("Saved");
     });
 
     // 3. Client B sees note appear in sidebar
@@ -60,7 +61,8 @@ test.describe("Real-Time Sync (Multi-Client)", () => {
         await editor.click();
         
         await page2.keyboard.type("Hello from Client B");
-        await expect(page2.locator("text=Saved")).toBeVisible();
+        // ✅ FIX: Use global sync status
+        await expect(page2.locator("sync-status")).toContainText("Saved");
     });
 
     // 5. Client A sees content update

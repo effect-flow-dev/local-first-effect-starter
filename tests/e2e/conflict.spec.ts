@@ -47,7 +47,8 @@ test.describe("Conflict Resolution & Offline Sync", () => {
         await pageA.click('button:has-text("Checklist")');
         
         await expect(pageA.locator("smart-checklist")).toBeVisible();
-        await expect(pageA.locator("text=Saved")).toBeVisible();
+        // ✅ FIX: Target the global sync status to resolve ambiguity with NotePage local status
+        await expect(pageA.locator("sync-status")).toContainText("Saved");
     });
 
     // 3. Sync to Client B
@@ -68,7 +69,8 @@ test.describe("Conflict Resolution & Offline Sync", () => {
 
         const itemB = pageB.locator("smart-checklist .cursor-pointer").first();
         await itemB.click();
-        await expect(pageB.locator("text=Saved")).toBeVisible();
+        // ✅ FIX: Target global sync status
+        await expect(pageB.locator("sync-status")).toContainText("Saved");
         
         await pageB.waitForTimeout(2000); 
     });

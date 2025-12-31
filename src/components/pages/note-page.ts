@@ -349,11 +349,8 @@ export class NotePage extends LitElement {
     }
 
     private _renderBlock(block: AppBlock) {
-        // Handle Synthetic Alert Blocks
         if (block.type === 'alert') {
-            // ✅ FIX: Safely access fields without 'any'
             const fields = block.fields as { level?: string } | undefined;
-            // Unused var prefixed with _ to silence linter
             const _level = fields?.level || 'warning';
             
             return html`
@@ -494,13 +491,7 @@ export class NotePage extends LitElement {
                 </div>`;
 
             case "ready": {
-                const { note, blocks, isSaving, saveError, deleteConfirmOpen, preview } = s;
-
-                const renderStatus = () => {
-                    if (saveError) return html`<span class="text-red-500">${getErrorMessage(saveError)}</span>`;
-                    if (isSaving) return t("note.saving");
-                    return t("note.saved");
-                };
+                const { note, blocks, saveError, deleteConfirmOpen, preview } = s;
 
                 return html`
                   <history-sidebar></history-sidebar>
@@ -532,7 +523,9 @@ export class NotePage extends LitElement {
                            </div>
                         </div>
                         <div class="flex items-center gap-4">
-                          <div class=${styles.status}>${renderStatus()}</div>
+                          <!-- ✅ REMOVED: Redundant status indicator (saved/saving) to fix duplicate text error in tests -->
+                          <!-- Only showing error message if present -->
+                          ${saveError ? html`<span class="text-red-500">${getErrorMessage(saveError)}</span>` : nothing}
 
                           <button
                             class="rounded-full p-1.5 text-zinc-400 shadow-sm transition-colors hover:bg-zinc-100 hover:text-zinc-600"

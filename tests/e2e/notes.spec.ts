@@ -33,14 +33,16 @@ test.describe("Notes & Sync Core", () => {
     
     const titleInput = page.getByTestId("note-title-input");
     await titleInput.fill("E2E Block Test");
-    await expect(page.locator("text=Saved")).toBeVisible();
+    // ✅ FIX: Use global sync status
+    await expect(page.locator("sync-status")).toContainText("Saved");
     
     // 2. Type in the first block (Default Text Block)
     // In new architecture, we have multiple editors. We target the first one.
     const firstEditor = page.locator("tiptap-editor").first().locator(".ProseMirror");
     await firstEditor.click();
     await page.keyboard.type("First block content");
-    await expect(page.locator("text=Saved")).toBeVisible();
+    // ✅ FIX: Use global sync status
+    await expect(page.locator("sync-status")).toContainText("Saved");
 
     // 3. Add a Checklist Block using the FAB
     // Open FAB menu
@@ -56,7 +58,8 @@ test.describe("Notes & Sync Core", () => {
     // The default checklist item is "New Item"
     await checklist.locator("text=New Item").click();
     // Wait for save
-    await expect(page.locator("text=Saved")).toBeVisible();
+    // ✅ FIX: Use global sync status
+    await expect(page.locator("sync-status")).toContainText("Saved");
 
     // 4. Reload
     await page.reload();
