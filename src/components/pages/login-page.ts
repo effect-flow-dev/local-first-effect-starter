@@ -1,7 +1,6 @@
 // FILE: src/components/pages/login-page.ts
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { customElement } from "lit/decorators.js";
-import { Capacitor } from "@capacitor/core";
 import { navigate } from "../../lib/client/router";
 import { proposeAuthAction } from "../../lib/client/stores/authStore";
 import { api } from "../../lib/client/api";
@@ -13,7 +12,6 @@ import { effect } from "@preact/signals-core";
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { runClientUnscoped } from "../../lib/client/runtime";
 import type { PublicUser } from "../../lib/shared/schemas";
-import { clientLog } from "../../lib/client/clientLog";
 
 interface Model {
   email: string;
@@ -43,16 +41,6 @@ const update = (model: Model, action: Action): Model => {
       return { ...model, isLoading: false, error: action.payload };
   }
 };
-
-// Define locally to avoid heavy server-side imports
-interface MembershipData {
-  memberships: {
-    id: string;
-    name: string;
-    subdomain: string;
-    role: string;
-  }[];
-}
 
 @customElement("login-page")
 export class LoginPage extends LitElement {
@@ -85,10 +73,12 @@ export class LoginPage extends LitElement {
     const { email, password } = this.ctrl.model;
 
     try {
-      const { data, error } = await api.api.auth.login.post({
+      const response = await api.api.auth.login.post({
         email,
         password,
       });
+
+      const { data, error } = response;
 
       if (error) {
         const errorValue = error.value;
@@ -102,64 +92,21 @@ export class LoginPage extends LitElement {
         return;
       }
 
-      if (data && data.token && data.user) {
+      // Explicitly check for successful payload structure
+      if (data && 'token' in data && 'user' in data && data.token) {
         this.ctrl.propose({ type: "LOGIN_SUCCESS" });
         
         const user = data.user as unknown as PublicUser;
-        const rootDomain = import.meta.env.VITE_ROOT_DOMAIN || "localhost";
-        const currentHostname = window.location.hostname;
-        
-        // ✅ FIX: Explicitly handle 127.0.0.1 as a root domain for local E2E testing
-        const isRootDomain = 
-            currentHostname === rootDomain || 
-            currentHostname.includes("localhost") || 
-            currentHostname === "127.0.0.1";
-            
-        const isNative = Capacitor.isNativePlatform();
+        const token = data.token;
 
         // Save JWT immediately
-        localStorage.setItem("jwt", data.token);
+        localStorage.setItem("jwt", token);
 
-        // --- ROOT DOMAIN LOGIC ---
-        if (!isNative && isRootDomain) {
-            // Fetch Memberships to decide where to go
-            const memRes = await api.api.auth.memberships.get({
-                headers: { Authorization: `Bearer ${data.token}` }
-            });
-
-            // Safe type check
-            if (memRes.data && typeof memRes.data === 'object' && 'memberships' in memRes.data) {
-                // Cast to the local interface
-                const membershipData = memRes.data as unknown as MembershipData;
-                const memberships = membershipData.memberships;
-                
-                if (memberships.length === 1) {
-                    // Single Membership -> Auto Redirect
-                     
-                    const targetSubdomain = memberships[0]!.subdomain;
-                    void runClientUnscoped(clientLog("info", `[Login] Auto-redirect to single tenant: ${targetSubdomain}`));
-                    
-                    const protocol = window.location.protocol;
-                    const port = window.location.port ? `:${window.location.port}` : "";
-                    const targetUrl = `${protocol}//${targetSubdomain}.${rootDomain}${port}/?t=${data.token}`;
-                    
-                    // Save hint
-                    localStorage.setItem("last_visited_tenant", targetSubdomain);
-                    window.location.href = targetUrl;
-                    return;
-                } else if (memberships.length > 1) {
-                    // Multiple Memberships -> Select Workspace
-                    runClientUnscoped(navigate("/select-workspace"));
-                    return;
-                }
-            }
-            
-            // If no memberships or fetch failed, update state and stay here (or go to create?)
-            // Fallthrough to standard auth state set
-        }
-
-        // --- TENANT/NATIVE LOGIC ---
-        // We are already on a tenant subdomain OR in native app
+        // --- AUTH SUCCESS ---
+        // In the isolated architecture, if we successfully logged in, 
+        // it means we are already on the correct tenant subdomain.
+        // We do not support "Global" login anymore.
+        
         // ✅ FIX: Update payload structure to { user }
         await proposeAuthAction({
           type: "SET_AUTHENTICATED",
@@ -168,9 +115,11 @@ export class LoginPage extends LitElement {
         
         runClientUnscoped(navigate("/"));
       } else {
+        // Handle case where server returns explicit error object in 200 OK (if configured that way)
+        // or unexpected data shape
         this.ctrl.propose({
           type: "LOGIN_ERROR",
-          payload: "Invalid response from server",
+          payload: (data && 'error' in data) ? (data as { error: string }).error : "Invalid response from server",
         });
       }
     } catch (err) {

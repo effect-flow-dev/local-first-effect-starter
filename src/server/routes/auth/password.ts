@@ -3,15 +3,14 @@ import { Elysia, t } from "elysia";
 import { Effect } from "effect";
 import { Argon2id } from "oslo/password";
 import { isWithinExpirationDate } from "oslo";
-import { centralDb } from "../../../db/client";
 import { effectPlugin } from "../../middleware/effect-plugin";
-import { userContext } from "../../context";
+import { userContext } from "../../context"; // ✅ Import Context
 import { handleAuthResult } from "./utils";
 import {
   createPasswordResetToken,
   sendPasswordResetEmail,
 } from "../../../features/auth/auth.service";
-import type { PasswordResetTokenId } from "#src/types/generated/central/public/PasswordResetToken.js";
+import type { PasswordResetTokenId } from "../../../types/generated/tenant/tenant_template/PasswordResetToken"; // ✅ Fixed Import
 import {
   AuthDatabaseError,
   TokenInvalidError,
@@ -21,15 +20,22 @@ import {
 
 export const passwordRoutes = new Elysia()
   .use(effectPlugin)
+  .use(userContext) // ✅ Apply Context globally to these routes to access userDb
   .post(
     "/requestPasswordReset",
-    async ({ body, set, runEffect }) => {
+    async ({ body, set, runEffect, userDb, tenant }) => {
       const requestResetEffect = Effect.gen(function* () {
+        if (!userDb || !tenant) {
+            set.status = 400;
+            return { error: "Workspace required for password reset." };
+        }
+
         const { email } = body;
 
+        // ✅ Use userDb (Tenant DB)
         const user = yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .selectFrom("user")
               .select(["id", "email", "email_verified"])
               .where("email", "=", email)
@@ -38,7 +44,8 @@ export const passwordRoutes = new Elysia()
         });
 
         if (user && user.email_verified) {
-          const token = yield* createPasswordResetToken(user.id);
+          // ✅ Pass userDb
+          const token = yield* createPasswordResetToken(userDb, user.id);
           yield* sendPasswordResetEmail(user.email, token);
         }
 
@@ -56,13 +63,19 @@ export const passwordRoutes = new Elysia()
   )
   .post(
     "/resetPassword",
-    async ({ body, set, runEffect }) => {
+    async ({ body, set, runEffect, userDb, tenant }) => {
       const resetEffect = Effect.gen(function* () {
+        if (!userDb || !tenant) {
+            set.status = 400;
+            return { error: "Workspace required for password reset." };
+        }
+
         const { token, newPassword } = body;
 
+        // ✅ Use userDb (Tenant DB)
         const storedToken = yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .deleteFrom("password_reset_token")
               .where("id", "=", token as PasswordResetTokenId)
               .returningAll()
@@ -89,7 +102,7 @@ export const passwordRoutes = new Elysia()
 
         yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .updateTable("user")
               .set({ password_hash: newHash })
               .where("id", "=", storedToken.user_id)
@@ -110,11 +123,10 @@ export const passwordRoutes = new Elysia()
       }),
     },
   )
-  .use(userContext)
   .post(
     "/change-password",
-    async ({ body, user, set, runEffect }) => {
-      if (!user) {
+    async ({ body, user, userDb, set, runEffect }) => {
+      if (!user || !userDb) {
         set.status = 401;
         return { error: "Unauthorized" };
       }
@@ -122,9 +134,10 @@ export const passwordRoutes = new Elysia()
       const changeEffect = Effect.gen(function* () {
         const { oldPassword, newPassword } = body;
 
+        // ✅ Use userDb (Tenant DB)
         const fullUser = yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .selectFrom("user")
               .selectAll()
               .where("id", "=", user.id)
@@ -152,7 +165,7 @@ export const passwordRoutes = new Elysia()
 
         yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .updateTable("user")
               .set({ password_hash: newHash })
               .where("id", "=", user.id)

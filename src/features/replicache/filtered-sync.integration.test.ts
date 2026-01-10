@@ -12,7 +12,7 @@ import type { Database } from "../../types";
 describe("Filtered Sync (The Lens) - Integration", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
-  let schemaUserId: UserId; // ✅ FIX: Capture the ID used for schema creation
+  let schemaUserId: UserId;
 
   afterAll(async () => {
     await closeTestDb();
@@ -115,21 +115,16 @@ describe("Filtered Sync (The Lens) - Integration", () => {
   it("should only return notes/blocks matching the '#business' tag filter", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // ✅ FIX: Use the schemaUserId created in beforeEach
         const userId = schemaUserId;
         const { noteA, noteB } = yield* setupTaggedData(userId);
 
         const mockUser: PublicUser = {
           id: userId,
           email: "test@lens.com",
-          // removed password_hash: "",
           email_verified: true,
           created_at: new Date(),
           avatar_url: null,
           permissions: [],
-          tenant_strategy: "schema",
-          database_name: null,
-          subdomain: "test",
         };
 
         const request: PullRequest = {
@@ -140,7 +135,6 @@ describe("Filtered Sync (The Lens) - Integration", () => {
 
         const response = yield* handlePull(request, mockUser, db);
 
-        // ✅ FIX: Handle 'clear' op which has no key property
         const keys = response.patch.map((op) => {
             if (op.op === 'clear') return 'clear';
             return op.key;
@@ -158,21 +152,16 @@ describe("Filtered Sync (The Lens) - Integration", () => {
   it("should return everything if no filter is provided", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // ✅ FIX: Use the schemaUserId created in beforeEach
         const userId = schemaUserId;
         const { noteA, noteB } = yield* setupTaggedData(userId);
 
         const mockUser: PublicUser = {
           id: userId,
           email: "test@all.com",
-          // removed password_hash: "",
           email_verified: true,
           created_at: new Date(),
           avatar_url: null,
           permissions: [],
-          tenant_strategy: "schema",
-          database_name: null,
-          subdomain: "test",
         };
 
         const request: PullRequest = {
@@ -183,7 +172,6 @@ describe("Filtered Sync (The Lens) - Integration", () => {
 
         const response = yield* handlePull(request, mockUser, db);
 
-        // ✅ FIX: Handle 'clear' op safely
         const keys = response.patch.map((op) => {
             if (op.op === 'clear') return 'clear';
             return op.key;

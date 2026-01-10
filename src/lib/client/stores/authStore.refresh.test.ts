@@ -43,9 +43,6 @@ describe("authStore (Refresh Behavior)", () => {
       created_at: new Date(),
       avatar_url: null,
       permissions: [],
-      tenant_strategy: "schema",
-      database_name: null,
-      subdomain: "test-user",
     };
 
     // ✅ FIX: Wrap user in payload object { user: ... }

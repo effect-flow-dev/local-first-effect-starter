@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 
-const USER_ID = randomUUID() as UserId;
 const NOTE_ID = randomUUID() as NoteId;
 const BLOCK_ID_1 = randomUUID() as BlockId;
 const BLOCK_ID_2 = randomUUID() as BlockId;
@@ -16,13 +15,16 @@ const BLOCK_ID_2 = randomUUID() as BlockId;
 describe("TaskService (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
+  let validUserId: UserId;
 
   afterAll(async () => {
     await closeTestDb();
   });
 
   beforeEach(async () => {
-    const setup = await createTestUserSchema(randomUUID());
+    const userId = randomUUID() as UserId;
+    validUserId = userId; // Store
+    const setup = await createTestUserSchema(userId);
     db = setup.db;
     cleanup = setup.cleanup;
     return async () => await cleanup();
@@ -30,15 +32,16 @@ describe("TaskService (Integration)", () => {
 
   const seedData = (blocks: Array<{ id: BlockId; content: string }>) =>
     Effect.gen(function* () {
-      // In tenant schema, we don't need the user table for tasks, just the ID logic
+      // ✅ Use validUserId
       yield* Effect.promise(() =>
         db
           .insertInto("note")
           .values({
             id: NOTE_ID,
-            user_id: USER_ID,
+            user_id: validUserId,
             title: "Test Note",
             content: {},
+            version: 1, created_at: new Date(), updated_at: new Date()
           })
           .execute(),
       );
@@ -50,13 +53,16 @@ describe("TaskService (Integration)", () => {
             .values(
               blocks.map((b) => ({
                 id: b.id,
-                user_id: USER_ID,
+                user_id: validUserId,
                 note_id: NOTE_ID,
                 type: "paragraph",
                 content: b.content,
                 file_path: "",
                 depth: 0,
                 order: 0,
+                fields: {},
+                tags: [], links: [], transclusions: [],
+                version: 1, created_at: new Date(), updated_at: new Date()
               })),
             )
             .execute(),
@@ -72,13 +78,13 @@ describe("TaskService (Integration)", () => {
           { id: BLOCK_ID_2, content: "- [ ] Buy Milk" },
         ]);
 
-        yield* syncTasksForNote(db, NOTE_ID, USER_ID);
+        yield* syncTasksForNote(db, NOTE_ID, validUserId);
 
         const tasks = yield* Effect.promise(() =>
           db
             .selectFrom("task")
             .selectAll()
-            .where("user_id", "=", USER_ID)
+            .where("user_id", "=", validUserId)
             .execute(),
         );
 
@@ -97,7 +103,7 @@ describe("TaskService (Integration)", () => {
       Effect.gen(function* () {
         yield* seedData([{ id: BLOCK_ID_1, content: "- [x] Finished Job" }]);
 
-        yield* syncTasksForNote(db, NOTE_ID, USER_ID);
+        yield* syncTasksForNote(db, NOTE_ID, validUserId);
 
         const tasks = yield* Effect.promise(() =>
           db.selectFrom("task").selectAll().execute(),

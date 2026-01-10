@@ -2,9 +2,8 @@
 import { Data, Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
-import type { UserId } from "../../types/generated/central/public/User";
+import type { UserId, NoteId } from "../shared/schemas"; // ✅ Fixed Import
 import type { NewTask } from "../../types/generated/tenant/tenant_template/Task";
-import type { NoteId } from "../shared/schemas";
 
 const TASK_REGEX = /^\s*(-\s*)?\[( |x)\]\s+(.*)/i;
 
@@ -35,7 +34,6 @@ export const syncTasksForNote = (
           .execute(),
       catch: (cause) => new TaskServiceError({ cause }),
     });
-    yield* Effect.logInfo(`[TaskService] Cleared old tasks for note.`);
 
     const blocks = yield* Effect.tryPromise({
       try: () =>
@@ -43,13 +41,9 @@ export const syncTasksForNote = (
           .selectFrom("block")
           .select(["id", "content"])
           .where("note_id", "=", noteId)
-          //.where("user_id", "=", userId)
           .execute(),
       catch: (cause) => new TaskServiceError({ cause }),
     });
-    yield* Effect.logInfo(
-      `[TaskService] Found ${blocks.length} blocks to parse for new tasks.`,
-    );
 
     if (blocks.length === 0) {
       return;
@@ -76,12 +70,5 @@ export const syncTasksForNote = (
         try: () => db.insertInto("task").values(newTasks).execute(),
         catch: (cause) => new TaskServiceError({ cause }),
       });
-      yield* Effect.logInfo(
-        `[TaskService] Inserted ${newTasks.length} new tasks.`,
-      );
     }
-
-    yield* Effect.logInfo(
-      `[TaskService] Finished task sync for note ${noteId}.`,
-    );
   });

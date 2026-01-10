@@ -1,4 +1,3 @@
-// FILE: tests/e2e/auth.spec.ts
 import { test, expect } from "@playwright/test";
 import { createVerifiedUser, cleanupUser } from "./utils/seed";
 
@@ -25,30 +24,25 @@ test.describe("Authentication Flows", () => {
     await expect(page.locator("text=Check Your Email")).toBeVisible();
   });
 
-  test("Login: should allow a verified user to login and redirect to home", async ({ page }) => {
-    // 1. Seed a verified user directly into DB
-    const { email, password, userId } = await createVerifiedUser();
+  test("Login: should allow a verified user to login at their subdomain", async ({ page }) => {
+    const userData = await createVerifiedUser();
 
     try {
-      await page.goto("/login");
+      await page.goto(`http://${userData.subdomain}.localhost:3000/login`);
 
-      await page.fill('input[id="email"]', email);
-      await page.fill('input[id="password"]', password);
-      
+      await page.fill('input[id="email"]', userData.email);
+      await page.fill('input[id="password"]', userData.password);
       await page.click('button[type="submit"]');
 
-      // 2. Expect redirection to Home (Notes List)
-      // ✅ FIX: Allow redirect to tenant subdomain (e.g. test-e2e-123.localhost:3000/)
-      // We check that the path is just "/" regardless of the domain.
-      await expect(page).toHaveURL(/.*\/$/);
+      await expect(page).toHaveURL(new RegExp(`http://${userData.subdomain}\.localhost:3000/`));
       
-      // 3. Verify logged in UI elements
       await expect(page.locator("text=Profile")).toBeVisible();
       await expect(page.locator("text=Logout")).toBeVisible();
 
     } finally {
       await page.close(); 
-      await cleanupUser(userId);
+      // ✅ FIX: Pass the full data object for isolated cleanup
+      await cleanupUser(userData);
     }
   });
 });

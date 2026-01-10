@@ -11,7 +11,6 @@ import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 
 describe("Replicache Isolation (Multi-Tenant)", () => {
-  // We simulate two different tenants (sites)
   let siteA: { db: Kysely<Database>; cleanup: () => Promise<void>; schemaName: string };
   let siteB: { db: Kysely<Database>; cleanup: () => Promise<void>; schemaName: string };
 
@@ -24,10 +23,6 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
     created_at: new Date(),
     avatar_url: null,
     permissions: [],
-    // These legacy fields don't matter for the test as we pass the DB instance explicitly
-    tenant_strategy: "schema",
-    database_name: null,
-    subdomain: "irrelevant",
   };
 
   afterAll(async () => {
@@ -35,10 +30,24 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
   });
 
   beforeEach(async () => {
-    // 1. Provision two distinct schemas (simulating two tenants)
-    // We use random IDs for the "user" part of the schema helper to generate unique schema names
+    // 1. Provision two distinct schemas
     siteA = await createTestUserSchema(randomUUID());
     siteB = await createTestUserSchema(randomUUID());
+
+    // ✅ FIX: Insert the *Shared User* into both isolated databases
+    // createTestUserSchema inserts the *Owner* of the schema, but we are testing 
+    // a user who has access to BOTH (like an auditor), so we must manually add them.
+    const userRow = {
+        id: sharedUserId,
+        email: mockUser.email,
+        password_hash: "hash",
+        email_verified: true,
+        permissions: [],
+        created_at: new Date()
+    };
+
+    await siteA.db.insertInto("user").values(userRow).execute();
+    await siteB.db.insertInto("user").values(userRow).execute();
 
     return async () => {
       await siteA.cleanup();
@@ -56,7 +65,7 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
           title,
           content: { type: "doc", content: [] },
           version: 1,
-          global_version: "1", // Manually set for test
+          global_version: "1",
           created_at: new Date(),
           updated_at: new Date(),
         })
@@ -68,21 +77,17 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         // 1. Setup Data
-        // Site A has "Site A Smart Log"
         yield* insertNote(siteA.db, "Site A Smart Log");
-        
-        // Site B has "Site B Report"
         yield* insertNote(siteB.db, "Site B Report");
 
         // 2. Perform Pull on Site A
         const requestA: PullRequest = {
           clientGroupID: "client-group-a",
-          cookie: null, // Fresh sync
+          cookie: null,
         };
 
         const responseA = yield* handlePull(requestA, mockUser, siteA.db);
 
-        // 3. Verify Site A Data
         const noteTitlesA = responseA.patch
           .filter((op) => op.op === "put" && op.value._tag === "note")
           // @ts-expect-error op.value union narrowing
@@ -91,7 +96,7 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
         expect(noteTitlesA).toContain("Site A Smart Log");
         expect(noteTitlesA).not.toContain("Site B Report");
 
-        // 4. Perform Pull on Site B
+        // 3. Perform Pull on Site B
         const requestB: PullRequest = {
             clientGroupID: "client-group-b",
             cookie: null,
@@ -99,7 +104,6 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
 
         const responseB = yield* handlePull(requestB, mockUser, siteB.db);
 
-        // 5. Verify Site B Data
         const noteTitlesB = responseB.patch
             .filter((op) => op.op === "put" && op.value._tag === "note")
             // @ts-expect-error op.value union narrowing
@@ -116,7 +120,6 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
       Effect.gen(function* () {
         const newNoteId = randomUUID() as NoteId;
 
-        // 1. Push "Confidential Site A Info" to Site A
         const pushReq: PushRequest = {
           clientGroupID: "client-group-a",
           mutations: [
@@ -133,27 +136,17 @@ describe("Replicache Isolation (Multi-Tenant)", () => {
           ],
         };
 
-        // Pass 'MEMBER' role to pass RBAC checks
         yield* handlePush(pushReq, mockUser, siteA.db, "MEMBER");
 
-        // 2. Verify existence in Site A
+        // Verify existence in Site A
         const noteInA = yield* Effect.promise(() =>
-          siteA.db
-            .selectFrom("note")
-            .select("title")
-            .where("id", "=", newNoteId)
-            .executeTakeFirst()
+          siteA.db.selectFrom("note").select("title").where("id", "=", newNoteId).executeTakeFirst()
         );
         expect(noteInA?.title).toBe("Confidential Site A Info");
 
-        // 3. Verify ABSENCE in Site B
-        // Even though it's the same User ID, the data must not leak to the other schema
+        // Verify ABSENCE in Site B
         const noteInB = yield* Effect.promise(() =>
-          siteB.db
-            .selectFrom("note")
-            .select("title")
-            .where("id", "=", newNoteId)
-            .executeTakeFirst()
+          siteB.db.selectFrom("note").select("title").where("id", "=", newNoteId).executeTakeFirst()
         );
         expect(noteInB).toBeUndefined();
       })

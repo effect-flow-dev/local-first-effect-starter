@@ -23,6 +23,8 @@ export default interface TenantTable {
 
   schema_name: ColumnType<string | null, string | null, string | null>;
 
+  dedicated_db_secret: ColumnType<string | null, string | null, string | null>;
+
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 

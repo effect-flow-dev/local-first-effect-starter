@@ -2,12 +2,15 @@
 import { Effect } from "effect";
 import { createDate, TimeSpan } from "oslo";
 import { Migrator, sql, CompiledQuery } from "kysely";
-import { centralDb } from "../../db/client"; 
+import { centralDb, getUserDb, type TenantConfig } from "../../db/client"; 
 import { getTenantConnection } from "../../db/connection-manager";
 import { generateId } from "../../lib/server/utils";
 import type { UserId } from "../../lib/shared/schemas";
-import type { EmailVerificationTokenId } from "../../types/generated/central/public/EmailVerificationToken";
-import type { PasswordResetTokenId } from "../../types/generated/central/public/PasswordResetToken";
+import type { EmailVerificationTokenId } from "../../types/generated/tenant/tenant_template/EmailVerificationToken";
+import type { PasswordResetTokenId } from "../../types/generated/tenant/tenant_template/PasswordResetToken";
+// ✅ NEW: Import Central IDs for casting
+import type { ConsultancyId } from "../../types/generated/central/public/Consultancy";
+import type { TenantId } from "../../types/generated/central/public/Tenant";
 import { tenantMigrationObjects } from "../../db/migrations/tenant-migrations-manifest";
 import {
   TokenCreationError,
@@ -16,6 +19,7 @@ import {
 } from "./Errors";
 import { config } from "../../lib/server/Config"; 
 import { v4 as uuidv4 } from "uuid";
+import { PERMISSIONS } from "../../lib/shared/permissions";
 
 const getBaseUrl = () => {
   if (config.app.nodeEnv === "development") {
@@ -38,13 +42,14 @@ export const sendPasswordResetEmail = (email: string, token: string) =>
     yield* Effect.logWarning(`[EmailService] RESET LINK for ${email}: ${link}`);
   });
 
-export const createVerificationToken = (userId: UserId, email: string) =>
+// NOTE: These now take a 'db' argument because they write to Tenant DB
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const createVerificationToken = (db: any, userId: UserId, email: string) =>
   Effect.gen(function* () {
     const verificationToken = yield* generateId(40);
     yield* Effect.tryPromise({
       try: () =>
-        centralDb
-          .withSchema("public") // ✅ FIX: Explicit schema
+        db
           .insertInto("email_verification_token")
           .values({
             id: verificationToken as EmailVerificationTokenId,
@@ -58,40 +63,36 @@ export const createVerificationToken = (userId: UserId, email: string) =>
     return verificationToken;
   });
 
-export const createPasswordResetToken = (userId: UserId) =>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const createPasswordResetToken = (db: any, userId: UserId) =>
   Effect.gen(function* () {
     yield* Effect.tryPromise({
-      try: () =>
-        centralDb
-          .withSchema("public") // ✅ FIX: Explicit schema
-          .deleteFrom("password_reset_token")
-          .where("user_id", "=", userId)
-          .execute(),
-      catch: (cause) => new AuthDatabaseError({ cause }),
-    });
-    const tokenId = yield* generateId(40);
-    yield* Effect.tryPromise({
-      try: () =>
-        centralDb
-          .withSchema("public") // ✅ FIX: Explicit schema
-          .insertInto("password_reset_token")
-          .values({
-            id: tokenId as PasswordResetTokenId,
-            user_id: userId,
-            expires_at: createDate(new TimeSpan(2, "h")),
-          })
-          .execute(),
-      catch: (cause) => new TokenCreationError({ cause }),
-    });
-    return tokenId;
+        try: () =>
+          db
+            .deleteFrom("password_reset_token")
+            .where("user_id", "=", userId)
+            .execute(),
+        catch: (cause) => new AuthDatabaseError({ cause }),
+      });
+      const tokenId = yield* generateId(40);
+      yield* Effect.tryPromise({
+        try: () =>
+          db
+            .insertInto("password_reset_token")
+            .values({
+              id: tokenId as PasswordResetTokenId,
+              user_id: userId,
+              expires_at: createDate(new TimeSpan(2, "h")),
+            })
+            .execute(),
+        catch: (cause) => new TokenCreationError({ cause }),
+      });
+      return tokenId;
   });
 
-/**
- * Low-level helper: Provisions the actual Postgres Schema or Database
- */
 const provisionPhysicalInfrastructure = (
   strategy: "schema" | "database",
-  resourceName: string, // db name or schema name
+  resourceName: string, 
 ) =>
   Effect.gen(function* () {
     yield* Effect.logInfo(
@@ -114,8 +115,6 @@ const provisionPhysicalInfrastructure = (
       );
 
       const tenantDb = getTenantConnection(resourceName);
-      yield* Effect.logInfo(`Running migrations on database: ${resourceName}`);
-      
       const migrationResult = yield* Effect.promise(() => {
         const migrator = new Migrator({
           db: tenantDb,
@@ -131,21 +130,12 @@ const provisionPhysicalInfrastructure = (
       }
 
     } else {
-      // Strategy: Schema
       yield* Effect.tryPromise({
         try: async () => {
-          // We must use a raw connection to set search_path safely
           await centralDb.connection().execute(async (conn) => {
              try {
-                 // A. Create Schema
                  await sql`CREATE SCHEMA IF NOT EXISTS ${sql.ref(resourceName)}`.execute(conn);
-
-                 // B. Set search path for this migration session
-                 await conn.executeQuery(
-                   CompiledQuery.raw(`SET search_path TO "${resourceName}", public`)
-                 );
-
-                 // C. Run Migrations
+                 await conn.executeQuery(CompiledQuery.raw(`SET search_path TO "${resourceName}", public`));
                  const migrator = new Migrator({
                    db: conn,
                    provider: {
@@ -153,15 +143,11 @@ const provisionPhysicalInfrastructure = (
                    },
                    migrationTableSchema: resourceName,
                  });
-
                  const { error } = await migrator.migrateToLatest();
                  if (error) {
-                     throw error instanceof Error 
-                        ? error 
-                        : new Error(typeof error === "string" ? error : JSON.stringify(error));
+                     throw error instanceof Error ? error : new Error(String(error));
                  }
              } finally {
-                 // ✅ FIX: Reset search path to avoid polluting the connection pool
                  await conn.executeQuery(CompiledQuery.raw(`SET search_path TO public`));
              }
           });
@@ -171,24 +157,22 @@ const provisionPhysicalInfrastructure = (
     }
   });
 
-/**
- * Orchestrates the creation of Consultancy, Tenant, Membership, and Infrastructure.
- */
 export const createOrganizationHierarchy = (
   userId: UserId,
   email: string,
+  passwordHash: string, // Passed in
   consultancyName: string,
   tenantName: string,
   subdomain: string,
   strategy: "schema" | "database"
 ) => Effect.gen(function* () {
-    const consultancyId = uuidv4();
-    const tenantId = uuidv4();
+    // ✅ FIX: Cast string UUIDs to Branded Types
+    const consultancyId = uuidv4() as ConsultancyId;
+    const tenantId = uuidv4() as TenantId;
 
-    // 1. Create Consultancy
+    // 1. Create Consultancy (Central)
     yield* Effect.tryPromise({
         try: () => centralDb
-            .withSchema("public") // ✅ FIX
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .insertInto("consultancy" as any)
             .values({
@@ -200,14 +184,12 @@ export const createOrganizationHierarchy = (
         catch: (cause) => new AuthDatabaseError({ cause }),
     });
 
-    // 2. Determine Resource Names
     const schemaName = strategy === 'schema' ? `tenant_${tenantId.replace(/-/g, "")}` : null;
     const dbName = strategy === 'database' ? `tenant_db_${tenantId.replace(/-/g, "")}` : null;
 
-    // 3. Create Tenant Record
+    // 2. Create Tenant Record (Central)
     yield* Effect.tryPromise({
         try: () => centralDb
-            .withSchema("public") // ✅ FIX
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .insertInto("tenant" as any)
             .values({
@@ -224,24 +206,42 @@ export const createOrganizationHierarchy = (
         catch: (cause) => new AuthDatabaseError({ cause }),
     });
 
-    // 4. Create Membership (OWNER)
+    // 3. Provision Infrastructure
+    yield* provisionPhysicalInfrastructure(strategy, (dbName || schemaName)!);
+
+    // 4. Connect to New Tenant DB & Insert User
+    // (Removed Central tenant_membership insert as table is gone)
+    
+    const tenantConfig: TenantConfig = {
+      id: tenantId,
+      tenant_strategy: strategy,
+      database_name: dbName,
+      schema_name: schemaName
+    };
+    const userDb = getUserDb(tenantConfig);
+
+    yield* Effect.logInfo(`[Provisioning] Inserting Admin User into Tenant DB...`);
+    
+    const permissions = Object.values(PERMISSIONS);
+
     yield* Effect.tryPromise({
-        try: () => centralDb
-            .withSchema("public") // ✅ FIX
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .insertInto("tenant_membership" as any)
+        try: () => userDb
+            .insertInto("user")
             .values({
-                user_id: userId,
-                tenant_id: tenantId,
-                role: "OWNER",
-                joined_at: new Date(),
+                id: userId,
+                email,
+                password_hash: passwordHash,
+                email_verified: false,
+                permissions,
+                created_at: new Date(),
             })
             .execute(),
         catch: (cause) => new AuthDatabaseError({ cause }),
     });
 
-    // 5. Provision Infrastructure
-    yield* provisionPhysicalInfrastructure(strategy, (dbName || schemaName)!);
+    // 5. Verification
+    const token = yield* createVerificationToken(userDb, userId, email);
+    yield* sendVerificationEmail(email, token);
 
     return { consultancyId, tenantId };
 });
@@ -249,14 +249,7 @@ export const createOrganizationHierarchy = (
 export const provisionTenant = (
     _userId: UserId,
     strategy: "schema" | "database",
-    resourceNameOverride?: string
+    resourceNameOverride: string
 ) => Effect.gen(function*(){
-    let resourceName = "";
-    if (strategy === 'database') {
-        if (!resourceNameOverride) throw new Error("DB Name required for database strategy");
-        resourceName = resourceNameOverride;
-    } else {
-        resourceName = resourceNameOverride || `user_${_userId}`;
-    }
-    yield* provisionPhysicalInfrastructure(strategy, resourceName);
+    yield* provisionPhysicalInfrastructure(strategy, resourceNameOverride);
 });

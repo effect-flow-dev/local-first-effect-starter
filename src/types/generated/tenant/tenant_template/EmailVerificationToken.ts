@@ -7,7 +7,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from 'kysely';
 /** Identifier type for public.email_verification_token */
 export type EmailVerificationTokenId = string & { __brand: 'public.email_verification_token' };
 
-/** Represents the table public.email_verification_token */
+/** Represents the table tenant_template.email_verification_token */
 export default interface EmailVerificationTokenTable {
   id: ColumnType<EmailVerificationTokenId, EmailVerificationTokenId, EmailVerificationTokenId>;
 

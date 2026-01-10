@@ -32,14 +32,14 @@ describe("Provisioning Service (Integration)", () => {
       Effect.gen(function* () {
         const { userId, consultancyId, tenantId, email, subdomain, schemaName } = generateHierarchy("schema");
 
-        // 1. Setup Hierarchy (User has minimal fields now)
-        yield* Effect.promise(() => centralDb.insertInto("user").values({ id: userId, email, password_hash: "hash", email_verified: true, permissions: [], created_at: new Date() }).execute());
+        // 1. Setup Hierarchy
+        // Note: Central User table no longer exists, skipping user insert in Central.
+        
         yield* Effect.promise(() => 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             centralDb.insertInto("consultancy" as any).values({ id: consultancyId, name: "C1", created_at: new Date() }).execute()
         );
         
-        // Tenant has the configuration
         yield* Effect.promise(() => 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             centralDb.insertInto("tenant" as any).values({ 
@@ -52,15 +52,11 @@ describe("Provisioning Service (Integration)", () => {
             created_at: new Date() 
         }).execute());
         
-        yield* Effect.promise(() => 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            centralDb.insertInto("tenant_membership" as any).values({ user_id: userId, tenant_id: tenantId, role: "OWNER", joined_at: new Date() }).execute()
-        );
+        // Removed tenant_membership insert
 
         // 2. Provision
-        // provisionTenant expects resourceName as 3rd arg (string | undefined)
-        // We convert null to undefined here
-        yield* provisionTenant(userId, "schema", schemaName ?? undefined);
+        // Use ! assertion
+        yield* provisionTenant(userId, "schema", schemaName!);
 
         // 3. Verify Schema Exists
         const result = yield* Effect.promise(() => 
@@ -76,17 +72,15 @@ describe("Provisioning Service (Integration)", () => {
         const tableNames = tables.rows.map((r: any) => r.table_name);
         expect(tableNames).toContain("note");
         expect(tableNames).toContain("block");
+        expect(tableNames).toContain("user"); // User table should be here now
 
         // Cleanup
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         yield* Effect.promise(() => sql`DROP SCHEMA IF EXISTS ${sql.ref(schemaName!)} CASCADE`.execute(centralDb));
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        yield* Effect.promise(() => centralDb.deleteFrom("tenant_membership" as any).where("user_id", "=", userId).execute());
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         yield* Effect.promise(() => centralDb.deleteFrom("tenant" as any).where("id", "=", tenantId).execute());
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         yield* Effect.promise(() => centralDb.deleteFrom("consultancy" as any).where("id", "=", consultancyId).execute());
-        yield* Effect.promise(() => centralDb.deleteFrom("user").where("id", "=", userId).execute());
       })
     );
   });
@@ -97,13 +91,11 @@ describe("Provisioning Service (Integration)", () => {
         const { userId, consultancyId, tenantId, email, subdomain, dbName } = generateHierarchy("database");
 
         // 1. Setup Hierarchy
-        yield* Effect.promise(() => centralDb.insertInto("user").values({ id: userId, email, password_hash: "hash", email_verified: true, permissions: [], created_at: new Date() }).execute());
         yield* Effect.promise(() => 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             centralDb.insertInto("consultancy" as any).values({ id: consultancyId, name: "C2", created_at: new Date() }).execute()
         );
         
-        // Tenant has the configuration
         yield* Effect.promise(() => 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             centralDb.insertInto("tenant" as any).values({ 
@@ -116,14 +108,9 @@ describe("Provisioning Service (Integration)", () => {
             created_at: new Date() 
         }).execute());
 
-        yield* Effect.promise(() => 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            centralDb.insertInto("tenant_membership" as any).values({ user_id: userId, tenant_id: tenantId, role: "OWNER", joined_at: new Date() }).execute()
-        );
-
         // 2. Provision
-        // Convert null to undefined
-        yield* provisionTenant(userId, "database", dbName ?? undefined);
+        // Use ! assertion
+        yield* provisionTenant(userId, "database", dbName!);
 
         // 3. Verify Connection & Tables
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -139,12 +126,9 @@ describe("Provisioning Service (Integration)", () => {
         yield* Effect.promise(() => tenantDb.destroy());
         yield* Effect.promise(() => sql.raw(`DROP DATABASE IF EXISTS "${dbName}"`).execute(centralDb));
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        yield* Effect.promise(() => centralDb.deleteFrom("tenant_membership" as any).where("user_id", "=", userId).execute());
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         yield* Effect.promise(() => centralDb.deleteFrom("tenant" as any).where("id", "=", tenantId).execute());
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         yield* Effect.promise(() => centralDb.deleteFrom("consultancy" as any).where("id", "=", consultancyId).execute());
-        yield* Effect.promise(() => centralDb.deleteFrom("user").where("id", "=", userId).execute());
       })
     );
   });

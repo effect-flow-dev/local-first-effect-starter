@@ -2,7 +2,7 @@
 import { Effect, Schema } from "effect";
 import { sql, type Transaction, type Kysely } from "kysely";
 import type { Database } from "../../types";
-import { NotebookIdSchema } from "../../lib/shared/schemas";
+import { NotebookIdSchema, type UserId } from "../../lib/shared/schemas";
 import { NotebookDatabaseError } from "./Errors";
 import { getNextGlobalVersion } from "../replicache/versioning";
 import { NoteDatabaseError } from "../note/Errors";
@@ -32,7 +32,7 @@ export const handleCreateNotebook = (
           .insertInto("notebook")
           .values({
             id: args.id,
-            user_id: userId,
+            user_id: userId as UserId, // ✅ Cast string to UserId
             name: args.name,
             created_at: sql<Date>`now()`,
             global_version: String(globalVersion),
@@ -63,8 +63,6 @@ export const handleDeleteNotebook = (
     });
 
     // 2. Handle Orphaned Notes
-    // The DB has "ON DELETE SET NULL", but we need to bump the version of affected notes
-    // so clients know they have been moved to "Inbox" (null notebook).
     yield* Effect.tryPromise({
       try: () =>
         db
@@ -80,7 +78,6 @@ export const handleDeleteNotebook = (
     });
 
     // 3. Delete Notebook
-    // This will trigger the FK constraint to set notebook_id=null on notes if step 2 didn't strictly do it
     yield* Effect.tryPromise({
       try: () =>
         db

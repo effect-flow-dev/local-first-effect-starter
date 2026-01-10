@@ -2,11 +2,11 @@
 import { Elysia, t } from "elysia";
 import { Effect } from "effect";
 import { isWithinExpirationDate } from "oslo";
-import { centralDb } from "../../../db/client";
+import { userContext } from "../../context"; // ✅ Import context
 import { generateToken } from "../../../lib/server/JwtService";
 import { effectPlugin } from "../../middleware/effect-plugin";
 import { handleAuthResult } from "./utils";
-import type { EmailVerificationTokenId } from "#src/types/generated/central/public/EmailVerificationToken.js";
+import type { EmailVerificationTokenId } from "../../../types/generated/tenant/tenant_template/EmailVerificationToken";
 import type { PublicUser } from "../../../lib/shared/schemas";
 import {
   AuthDatabaseError,
@@ -14,16 +14,21 @@ import {
 } from "../../../features/auth/Errors";
 
 export const verifyRoute = new Elysia()
+  .use(userContext) // ✅ Need DB context
   .use(effectPlugin)
   .post(
     "/verifyEmail",
-    async ({ body, set, runEffect }) => {
+    async ({ body, userDb, set, runEffect }) => {
       const verifyEffect = Effect.gen(function* () {
+        if (!userDb) {
+            return yield* Effect.fail(new AuthDatabaseError({ cause: "No tenant context found" }));
+        }
+
         const { token } = body;
 
         const storedToken = yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .deleteFrom("email_verification_token")
               .where("id", "=", token as EmailVerificationTokenId)
               .returningAll()
@@ -45,7 +50,7 @@ export const verifyRoute = new Elysia()
 
         const user = yield* Effect.tryPromise({
           try: () =>
-            centralDb
+            userDb
               .updateTable("user")
               .set({ email_verified: true })
               .where("id", "=", storedToken.user_id)

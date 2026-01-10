@@ -9,7 +9,7 @@ import type { UserId, PublicUser } from "../shared/schemas";
 
 const TEST_USER_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" as UserId;
 
-// Mock user matching DB structure + New Fields
+// Mock user matching DB structure
 const mockUser: PublicUser = {
   id: TEST_USER_ID,
   email: "test@example.com",
@@ -17,9 +17,6 @@ const mockUser: PublicUser = {
   created_at: new Date(), // This will be ISO string in token, Date in object
   avatar_url: null,
   permissions: [],
-  tenant_strategy: "schema",
-  database_name: null,
-  subdomain: "test-user-subdomain"
 };
 
 const { testConfig } = vi.hoisted(() => ({
@@ -29,8 +26,6 @@ const { testConfig } = vi.hoisted(() => ({
 vi.mock("./Config", () => ({
   config: testConfig,
 }));
-
-// NOTE: We no longer mock centralDb because validateToken is stateless!
 
 describe("JwtService", () => {
   afterEach(() => {
@@ -51,8 +46,6 @@ describe("JwtService", () => {
         // Check fields
         expect(userFromToken.id).toBe(mockUser.id);
         expect(userFromToken.email).toBe(mockUser.email);
-        expect(userFromToken.subdomain).toBe(mockUser.subdomain);
-        expect(userFromToken.tenant_strategy).toBe(mockUser.tenant_strategy);
         
         // Verify Date hydration
         expect(userFromToken.created_at).toBeInstanceOf(Date);
@@ -103,7 +96,7 @@ describe("JwtService", () => {
           createJWT(
             "HS256",
             secretKey,
-            { id: TEST_USER_ID }, // Missing email, subdomain, etc.
+            { id: TEST_USER_ID }, // Missing email etc.
             { expiresIn: new TimeSpan(1, "h") }
           ),
         );

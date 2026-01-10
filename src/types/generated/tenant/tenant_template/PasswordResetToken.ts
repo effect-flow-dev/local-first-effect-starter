@@ -7,7 +7,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from 'kysely';
 /** Identifier type for public.password_reset_token */
 export type PasswordResetTokenId = string & { __brand: 'public.password_reset_token' };
 
-/** Represents the table public.password_reset_token */
+/** Represents the table tenant_template.password_reset_token */
 export default interface PasswordResetTokenTable {
   id: ColumnType<PasswordResetTokenId, PasswordResetTokenId, PasswordResetTokenId>;
 

@@ -2,9 +2,8 @@
 import { Data, Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
-import type { UserId } from "../../types/generated/central/public/User";
-import type { NoteId, BlockId } from "../shared/schemas"; // ✅ Added BlockId import
-import type { NewLink } from "#src/types/generated/tenant/tenant_template/Link";
+import type { UserId, NoteId, BlockId } from "../shared/schemas"; // ✅ Fixed Import
+import type { NewLink } from "../../types/generated/tenant/tenant_template/Link"; // ✅ Fixed Path (removed #src alias if issue, otherwise standard relative)
 
 const WIKI_LINK_REGEX = /\[\[([^\]]+)\]\]/g;
 

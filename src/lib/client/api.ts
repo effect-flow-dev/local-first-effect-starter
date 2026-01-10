@@ -1,34 +1,39 @@
-// FILE: src/lib/client/api.ts
+// File: src/lib/client/api.ts
+// ------------------------
 import { treaty } from "@elysiajs/eden";
 import { Capacitor } from "@capacitor/core";
 import type { App } from "../../server";
 
-// The "Trojan Horse" Production URL. 
-// Mobile apps will always talk to this, regardless of the user's specific tenant.
-const PROD_ROOT_URL = "https://life-io.xyz"; 
-
 const getBaseUrl = () => {
-  // 1. Mobile App (Capacitor) -> Always force Root Production URL
-  // This ensures the app doesn't try to talk to 'localhost' or a relative path in the WebView.
-  if (Capacitor.isNativePlatform()) {
-    // You can also use a specific VITE_MOBILE_API_URL env var if preferred later
-    return PROD_ROOT_URL;
-  }
-
-  // 2. Browser Development -> Explicit Dev Server
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
-
-  // 3. Browser Production -> Relative URL (Same Origin)
-  // This is crucial for Web: it allows the client to talk to 'app.life-io.xyz' 
-  // without CORS issues, because the client is served from that same subdomain.
-  if (typeof window !== "undefined") {
-    return window.location.origin;
-  }
-
-  // ✅ FIX: Use 127.0.0.1 fallback for consistency to avoid localhost lookup failures
-  return "http://127.0.0.1:42069";
+  if (Capacitor.isNativePlatform()) return "https://life-io.xyz";
+  if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL;
+  return window.location.origin;
 };
 
-export const api = treaty<App>(getBaseUrl());
+/**
+ * Gets the subdomain from the current hostname.
+ * e.g., 'site-a.localhost' -> 'site-a'
+ */
+const getSubdomainHint = () => {
+  if (typeof window === "undefined") return null;
+  const hostname = window.location.hostname;
+  const rootDomain = import.meta.env.VITE_ROOT_DOMAIN || "localhost";
+  
+  if (hostname === rootDomain || hostname === "127.0.0.1") return null;
+  if (hostname.endsWith(`.${rootDomain}`)) {
+    return hostname.replace(`.${rootDomain}`, "");
+  }
+  return null;
+};
+
+// Create the Eden Treaty client with automatic subdomain header injection
+export const api = treaty<App>(getBaseUrl(), {
+  headers: () => {
+    const subdomain = getSubdomainHint();
+    const token = localStorage.getItem("jwt");
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(subdomain ? { "X-Life-IO-Subdomain": subdomain } : {}),
+    };
+  }
+});

@@ -1,14 +1,16 @@
 // FILE: src/lib/shared/schemas.ts
 import { Schema } from "effect";
 
+// ✅ CHANGE: Import User types from Tenant schema instead of Central
+import type { UserId, User } from "../../types/generated/tenant/tenant_template/User";
 import type { NoteId, Note } from "../../types/generated/tenant/tenant_template/Note";
-import type { UserId, User } from "../../types/generated/central/public/User";
 import type { BlockId, Block } from "../../types/generated/tenant/tenant_template/Block";
 import type { NotebookId, Notebook } from "../../types/generated/tenant/tenant_template/Notebook";
 import type { BlockHistoryId, BlockHistory } from "../../types/generated/tenant/tenant_template/BlockHistory";
 
 export type { User, Note, Block, Notebook, BlockHistory, UserId, NoteId, BlockId, NotebookId, BlockHistoryId };
 
+// ... (Rest of the file remains unchanged)
 const uuidRegex =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const UUIDSchemaBase = Schema.String.pipe(
@@ -374,9 +376,7 @@ export const UserSchema = Schema.Struct({
   ),
   avatar_url: Schema.Union(Schema.String, Schema.Null),
   email_verified: Schema.Boolean,
-  tenant_strategy: Schema.optional(TenantStrategySchema),
-  database_name: Schema.optional(Schema.Union(Schema.String, Schema.Null)),
-  subdomain: Schema.optional(SubdomainSchema)
+  // Removed tenant-related fields from User as they belong to Tenant/Auth context now
 });
 
 export const PublicUserSchema = UserSchema.pipe(Schema.omit("password_hash"));
@@ -399,17 +399,9 @@ export const TenantSchema = Schema.Struct({
   created_at: LenientDateSchema,
 });
 
-export const TenantMembershipSchema = Schema.Struct({
-  user_id: UserIdSchema,
-  tenant_id: TenantIdSchema,
-  role: Schema.Literal('OWNER', 'ADMIN', 'MEMBER', 'GUEST'),
-  joined_at: LenientDateSchema,
-});
+// TenantMembershipSchema removed or deprecated as membership is now implicit by being in the DB
 
-
-// --- Phase 2: Hybrid Architecture Schemas ---
-
-// Base structure for all blocks
+// ... (Rest of Block Schemas remain unchanged)
 const BlockBase = {
   id: BlockIdSchema,
   user_id: UserIdSchema,
@@ -455,7 +447,6 @@ export const MapBlockSchema = Schema.Struct({
   fields: MapBlockFieldsSchema,
 });
 
-// Legacy / Generic support
 export const GenericBlockSchema = Schema.Struct({
   ...BlockBase,
   type: Schema.String,
@@ -475,8 +466,6 @@ export type TiptapTextBlock = Schema.Schema.Type<typeof TiptapTextBlockSchema>;
 export type FormChecklistBlock = Schema.Schema.Type<typeof FormChecklistBlockSchema>;
 export type FormMeterBlock = Schema.Schema.Type<typeof FormMeterBlockSchema>;
 export type MapBlock = Schema.Schema.Type<typeof MapBlockSchema>;
-
-// --- Discriminated Union for Block Creation (Mutation Args) ---
 
 const CreateBlockBase = {
   noteId: NoteIdSchema,

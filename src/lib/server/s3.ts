@@ -2,7 +2,7 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Data, Effect } from "effect";
-import type { UserId } from "../../types/generated/central/public/User";
+import type { UserId } from "../shared/schemas"; // ✅ Fixed Import
 import { config } from "./Config";
 import { generateUUID } from "./utils";
 
@@ -24,7 +24,6 @@ export const uploadAvatar = (
   file: File,
 ): Effect.Effect<string, S3UploadError> =>
   Effect.gen(function* () {
-    // ✅ FIX: Determine extension from filename or fallback to webp
     const ext = file.name.split(".").pop()?.toLowerCase() || "webp";
     const key = `avatars/${userId}/${yield* generateUUID()}.${ext}`;
 
@@ -48,16 +47,13 @@ export const uploadAvatar = (
     return `${config.s3.publicAvatarUrl}/${key}`;
   });
 
-// ✅ NEW: Generic Media Upload
 export const uploadMedia = (
   userId: UserId,
   file: File,
 ): Effect.Effect<string, S3UploadError> =>
   Effect.gen(function* () {
-    // Extract extension from MIME type or filename, fallback to bin
     const ext = file.name.split(".").pop() || "bin";
     const uuid = yield* generateUUID();
-    // Structure: media/{userId}/{uuid}.{ext}
     const key = `media/${userId}/${uuid}.${ext}`;
 
     const bodyStream = file.stream();

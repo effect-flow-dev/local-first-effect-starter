@@ -6,7 +6,51 @@ export async function up(db: Kysely<Database>) {
   // --- 1. Global Sequence (Hybrid Logical Clock) ---
   await sql`CREATE SEQUENCE IF NOT EXISTS global_version_seq`.execute(db);
 
-  // --- 2. Core Entities ---
+  // --- 2. Identity & Auth (Moved from Central) ---
+  
+  // USER
+  await db.schema
+    .createTable("user")
+    .ifNotExists()
+    .addColumn("id", "uuid", (c) =>
+      c.primaryKey().defaultTo(sql`gen_random_uuid()`),
+    )
+    .addColumn("email", "text", (c) => c.notNull().unique())
+    .addColumn("password_hash", "text", (c) => c.notNull())
+    .addColumn("permissions", sql`text[]`, (c) =>
+      c.defaultTo(sql`'{}'::text[]`),
+    )
+    .addColumn("avatar_url", "text")
+    .addColumn("email_verified", "boolean", (c) => c.notNull().defaultTo(false))
+    .addColumn("created_at", "timestamp", (c) =>
+      c.notNull().defaultTo(sql`now()`),
+    )
+    .execute();
+
+  // PASSWORD RESET TOKEN
+  await db.schema
+    .createTable("password_reset_token")
+    .ifNotExists()
+    .addColumn("id", "text", (c) => c.primaryKey())
+    .addColumn("user_id", "uuid", (c) =>
+      c.notNull().references("user.id").onDelete("cascade"),
+    )
+    .addColumn("expires_at", "timestamp", (c) => c.notNull())
+    .execute();
+
+  // EMAIL VERIFICATION TOKEN
+  await db.schema
+    .createTable("email_verification_token")
+    .ifNotExists()
+    .addColumn("id", "text", (c) => c.primaryKey())
+    .addColumn("user_id", "uuid", (c) =>
+      c.notNull().references("user.id").onDelete("cascade"),
+    )
+    .addColumn("email", "text", (c) => c.notNull())
+    .addColumn("expires_at", "timestamp", (c) => c.notNull())
+    .execute();
+
+  // --- 3. Core Entities (Updated with FKs to local User) ---
 
   // NOTEBOOK
   await db.schema
@@ -15,7 +59,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("name", "text", (c) => c.notNull())
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -31,12 +75,6 @@ export async function up(db: Kysely<Database>) {
     .column("global_version")
     .execute();
 
-  await db.schema
-    .createIndex("notebook_user_id_idx")
-    .on("notebook")
-    .column("user_id")
-    .execute();
-
   // NOTE
   await db.schema
     .createTable("note")
@@ -44,9 +82,9 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("title", "text", (c) => c.notNull())
-    .addColumn("content", "jsonb", (c) => c.notNull()) // Legacy full-content blob
+    .addColumn("content", "jsonb", (c) => c.notNull()) 
     .addColumn("version", "integer", (c) => c.notNull().defaultTo(1))
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -71,12 +109,6 @@ export async function up(db: Kysely<Database>) {
     .execute();
 
   await db.schema
-    .createIndex("note_notebook_id_idx")
-    .on("note")
-    .column("notebook_id")
-    .execute();
-
-  await db.schema
     .createIndex("note_title_idx")
     .on("note")
     .column("title")
@@ -89,7 +121,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("name", "text", (c) => c.notNull())
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -140,7 +172,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("depth", "integer", (c) => c.notNull())
     .addColumn("order", "integer", (c) => c.notNull())
     .addColumn("version", "integer", (c) => c.notNull().defaultTo(1))
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
@@ -183,12 +215,6 @@ export async function up(db: Kysely<Database>) {
     .column("target_note_id")
     .execute();
 
-  await db.schema
-    .createIndex("link_source_block_idx")
-    .on("link")
-    .column("source_block_id")
-    .execute();
-
   // TASK
   await db.schema
     .createTable("task")
@@ -196,7 +222,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("source_block_id", "uuid", (c) =>
       c.notNull().references("block.id").onDelete("cascade").unique(),
     )
@@ -219,18 +245,12 @@ export async function up(db: Kysely<Database>) {
     .execute();
 
   await db.schema
-    .createIndex("task_user_id_idx")
-    .on("task")
-    .column("user_id")
-    .execute();
-
-  await db.schema
     .createIndex("task_global_version_idx")
     .on("task")
     .column("global_version")
     .execute();
 
-  // --- 3. Sync Infrastructure ---
+  // --- 4. Sync Infrastructure ---
 
   // TOMBSTONE
   await db.schema
@@ -240,7 +260,7 @@ export async function up(db: Kysely<Database>) {
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
     .addColumn("entity_id", "uuid", (c) => c.notNull())
-    .addColumn("entity_type", "text", (c) => c.notNull()) // 'note', 'block', 'task', 'notebook'
+    .addColumn("entity_type", "text", (c) => c.notNull())
     .addColumn("deleted_at_version", "bigint", (c) => c.notNull())
     .addColumn("deleted_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -258,7 +278,7 @@ export async function up(db: Kysely<Database>) {
     .createTable("replicache_client_group")
     .ifNotExists()
     .addColumn("id", "text", (c) => c.primaryKey())
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("cvr_version", "integer", (c) => c.notNull().defaultTo(0))
     .addColumn("updated_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -282,7 +302,7 @@ export async function up(db: Kysely<Database>) {
     .createTable("client_view_record")
     .ifNotExists()
     .addColumn("id", "serial", (c) => c.primaryKey())
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("data", "jsonb", (c) => c.notNull())
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
@@ -328,7 +348,7 @@ export async function up(db: Kysely<Database>) {
     )
     .execute();
 
-  // --- 4. History & Audit ---
+  // --- 5. History & Audit ---
 
   await db.schema
     .createTable("block_history")
@@ -336,9 +356,9 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("block_id", "uuid", (c) => c.notNull())
-    .addColumn("note_id", "uuid", (c) => c.notNull())
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("block_id", "uuid", (c) => c.notNull()) 
+    .addColumn("note_id", "uuid", (c) => c.notNull().references("note.id").onDelete("cascade"))
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("timestamp", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
@@ -360,7 +380,7 @@ export async function up(db: Kysely<Database>) {
     .column("note_id")
     .execute();
 
-  // --- 5. Notifications ---
+  // --- 6. Notifications ---
 
   await db.schema
     .createTable("push_subscription")
@@ -368,7 +388,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("id", "uuid", (c) =>
       c.primaryKey().defaultTo(sql`gen_random_uuid()`),
     )
-    .addColumn("user_id", "uuid", (c) => c.notNull())
+    .addColumn("user_id", "uuid", (c) => c.notNull().references("user.id").onDelete("cascade"))
     .addColumn("endpoint", "text", (c) => c.notNull().unique())
     .addColumn("p256dh", "text", (c) => c.notNull())
     .addColumn("auth", "text", (c) => c.notNull())
@@ -401,5 +421,8 @@ export async function down(db: Kysely<Database>) {
   await db.schema.dropTable("tag").ifExists().execute();
   await db.schema.dropTable("note").ifExists().execute();
   await db.schema.dropTable("notebook").ifExists().execute();
+  await db.schema.dropTable("email_verification_token").ifExists().execute();
+  await db.schema.dropTable("password_reset_token").ifExists().execute();
+  await db.schema.dropTable("user").ifExists().execute();
   await sql`DROP SEQUENCE IF EXISTS global_version_seq`.execute(db);
 }

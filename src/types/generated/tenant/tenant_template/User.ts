@@ -6,7 +6,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from 'kysely';
 /** Identifier type for public.user */
 export type UserId = string & { __brand: 'public.user' };
 
-/** Represents the table public.user */
+/** Represents the table tenant_template.user */
 export default interface UserTable {
   id: ColumnType<UserId, UserId | undefined, UserId>;
 

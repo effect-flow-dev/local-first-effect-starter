@@ -11,35 +11,34 @@ import type { Kysely } from "kysely";
 describe("LinkService (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
+  let validUserId: UserId;
 
   afterAll(async () => {
     await closeTestDb();
   });
 
   beforeEach(async () => {
-    const setup = await createTestUserSchema(randomUUID());
+    const userId = randomUUID() as UserId;
+    validUserId = userId; // Store
+    const setup = await createTestUserSchema(userId);
     db = setup.db;
     cleanup = setup.cleanup;
     
     return async () => await cleanup();
   });
 
-  const setupData = Effect.gen(function* () {
-    const userId = randomUUID() as UserId;
+  // Use a generator function that takes userId
+  const setupData = (userId: UserId) => Effect.gen(function* () {
     const sourceNoteId = randomUUID() as NoteId;
     const targetNoteId = randomUUID() as NoteId;
     const blockId = randomUUID() as BlockId;
-
-    // Insert user into TENANT schema logic for testing references (though no FK to public in tenant)
-    // NOTE: In the current migration, the tenant schema doesn't have a user table anymore. 
-    // We just need the IDs to be consistent.
 
     yield* Effect.promise(() =>
       db
         .insertInto("note")
         .values([
-          { id: sourceNoteId, user_id: userId, title: "Source Note", content: {} },
-          { id: targetNoteId, user_id: userId, title: "Target Note", content: {} },
+          { id: sourceNoteId, user_id: userId, title: "Source Note", content: {}, version: 1, created_at: new Date(), updated_at: new Date() },
+          { id: targetNoteId, user_id: userId, title: "Target Note", content: {}, version: 1, created_at: new Date(), updated_at: new Date() },
         ])
         .execute(),
     );
@@ -56,19 +55,26 @@ describe("LinkService (Integration)", () => {
           file_path: "",
           depth: 0,
           order: 0,
+          fields: {},
+          tags: [],
+          links: [],
+          transclusions: [],
+          version: 1,
+          created_at: new Date(),
+          updated_at: new Date()
         })
         .execute(),
     );
 
-    return { userId, sourceNoteId, targetNoteId, blockId };
+    return { sourceNoteId, targetNoteId, blockId };
   });
 
   it("should resolve note titles to IDs and insert links", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const { userId, sourceNoteId, targetNoteId, blockId } = yield* setupData;
+        const userId = validUserId; // ✅ Use valid ID
+        const { sourceNoteId, targetNoteId, blockId } = yield* setupData(userId);
 
-        // Pass DB and userId
         yield* updateLinksForNote(db, sourceNoteId, userId);
 
         const links = yield* Effect.promise(() =>
@@ -91,7 +97,8 @@ describe("LinkService (Integration)", () => {
   it("should remove links when block content changes", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const { userId, sourceNoteId, blockId } = yield* setupData;
+        const userId = validUserId; // ✅ Use valid ID
+        const { sourceNoteId, blockId } = yield* setupData(userId);
 
         yield* updateLinksForNote(db, sourceNoteId, userId);
 

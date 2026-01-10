@@ -13,8 +13,7 @@ import "../../components/pages/verify-email-page";
 import "../../components/pages/profile-page";
 import "../../components/pages/forgot-password-page";
 import "../../components/pages/reset-password-page";
-import "../../components/pages/workspace-selection-page";
-// ✅ NEW: Import Table Page
+// REMOVED: workspace-selection-page import
 import "../../components/pages/notes-table-page";
 
 const UnauthorizedView = (): ViewResult => ({
@@ -43,7 +42,6 @@ const routes: Route[] = [
     view: () => ({ template: html`<notes-page></notes-page>` }),
     meta: { requiresAuth: true },
   },
-  // ✅ NEW: Notes Table View Route
   {
     pattern: /^\/notes\/table$/,
     view: () => ({ template: html`<notes-table-page></notes-table-page>` }),
@@ -78,11 +76,7 @@ const routes: Route[] = [
     }),
     meta: { isPublicOnly: true },
   },
-  {
-    pattern: /^\/select-workspace$/,
-    view: () => ({ template: html`<workspace-selection-page></workspace-selection-page>` }),
-    meta: { }, 
-  },
+  // REMOVED: /select-workspace route
   {
     pattern: /^\/profile$/,
     view: () => ({ template: html`<profile-page></profile-page>` }),

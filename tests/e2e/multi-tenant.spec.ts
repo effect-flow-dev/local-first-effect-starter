@@ -1,98 +1,82 @@
-// FILE: tests/e2e/multi-tenant.spec.ts
-import { test, expect } from "@playwright/test";
-import { createMultiTenantUser, cleanupUser } from "./utils/seed";
+    import { test, expect } from "@playwright/test";
+    import { createMultiTenantUser, cleanupUser } from "./utils/seed";
 
-// Define the expected shape of the /api/auth/me response
-interface AuthMeResponse {
-  user: {
-    id: string;
-    email: string;
-  };
-  tenant: {
-    id: string;
-    name: string;
-    subdomain: string;
-  } | null;
-  role: string | null;
-}
+    test.describe("Multi-Tenancy Isolation", () => {
+        let user: Awaited<ReturnType<typeof createMultiTenantUser>>;
 
-test.describe("Multi-Tenancy & Access Control", () => {
-  let user: Awaited<ReturnType<typeof createMultiTenantUser>>;
+        test.beforeAll(async () => {
+            user = await createMultiTenantUser();
+        });
 
-  test.beforeAll(async () => {
-    user = await createMultiTenantUser();
-  });
+        test.afterAll(async () => {
+            await cleanupUser({ 
+                consultancyId: user.consultancyId, 
+                sites: user.sites 
+            });
+        });
 
-  test.afterAll(async () => {
-    await cleanupUser(user.userId);
-  });
+        test("Should enforce isolation and allow independent logins at Site A and Site B", async ({ page }) => {
+            // 1. TEST SITE A LOGIN
+            await page.goto(`http://${user.sites.a.subdomain}.localhost:3000/login`);
+            
+            await page.fill('input[id="email"]', user.email);
+            await page.fill('input[id="password"]', user.password);
+            await page.click('button[type="submit"]');
 
-  test("Should enforce isolation between Site A, Site B, and block Site C", async ({ page }) => {
-    // 1. Login
-    await page.goto("/login");
-    await page.fill('input[id="email"]', user.email);
-    await page.fill('input[id="password"]', user.password);
-    await page.click('button[type="submit"]');
+            await expect(page).toHaveURL(new RegExp(`${user.sites.a.subdomain}\.localhost:3000/`));
+            await expect(page.locator("text=Profile")).toBeVisible();
 
-    // 2. Expect redirection to Workspace Selection (since >1 membership)
-    await expect(page).toHaveURL("/select-workspace");
-    await expect(page.locator("text=Select Workspace")).toBeVisible();
-    
-    // Verify both valid sites are listed
-    await expect(page.locator(`text=${user.sites.a.subdomain}`)).toBeVisible();
-    await expect(page.locator(`text=${user.sites.b.subdomain}`)).toBeVisible();
-    // Site C should NOT be listed
-    await expect(page.locator(`text=${user.sites.c.subdomain}`)).not.toBeVisible();
+            // 2. VERIFY SITE B ACCESS
+            await page.evaluate(() => localStorage.clear());
+            
+            await page.goto(`http://${user.sites.b.subdomain}.localhost:3000/login`);
+            await page.fill('input[id="email"]', user.email);
+            await page.fill('input[id="password"]', user.password);
+            await page.click('button[type="submit"]');
 
-    // --- TEST SITE A ACCESS ---
-    await page.click(`text=${user.sites.a.subdomain}`);
-    
-    await expect(page).not.toHaveURL("/select-workspace");
+            await expect(page).toHaveURL(new RegExp(`${user.sites.b.subdomain}\.localhost:3000/`));
 
-    // Wait for token hydration on the new domain.
-    await page.waitForFunction(() => !!localStorage.getItem("jwt"), null, { timeout: 10000 });
+            // 3. TEST SITE C (UNAUTHORIZED)
+            await page.evaluate(() => localStorage.clear());
+            await page.goto(`http://${user.sites.c.subdomain}.localhost:3000/login`);
+            
+            await page.fill('input[id="email"]', user.email);
+            await page.fill('input[id="password"]', user.password);
+            await page.click('button[type="submit"]');
 
-    const token = await page.evaluate(() => localStorage.getItem("jwt"));
-    expect(token).toBeTruthy();
+            await expect(page.locator("text=Invalid credentials")).toBeVisible();
+            await page.close();
+        });
 
-    // --- TEST SITE C (UNAUTHORIZED) ACCESS via API ---
+        test("Should ensure API tokens are restricted to the tenant that issued them", async ({ page }) => {
+            // 1. Login to Site A
+            await page.goto(`http://${user.sites.a.subdomain}.localhost:3000/login`);
+            await page.fill('input[id="email"]', user.email);
+            await page.fill('input[id="password"]', user.password);
+            await page.click('button[type="submit"]');
+            
+            // 2. ✅ FIX: Polling for Token hydration
+            // Login is async; we must wait for the JWT to be stored before checking it.
+            await expect.poll(async () => {
+                return await page.evaluate(() => localStorage.getItem("jwt"));
+            }, {
+                message: "Wait for JWT to be stored in localStorage after login",
+                timeout: 10000
+            }).toBeTruthy();
 
-    // 1. Verify API Access to Site A (Allowed)
-    const resA = await page.request.get(`http://127.0.0.1:42069/api/auth/me`, {
-        headers: { 
-            Authorization: `Bearer ${token}`,
-            'X-Life-IO-Subdomain': user.sites.a.subdomain 
-        }
+            const token = await page.evaluate(() => localStorage.getItem("jwt"));
+
+            // 3. Attempt cross-tenant access via API
+            // Direct request using Site A token against Site B context
+            const res = await page.request.get(`http://127.0.0.1:42069/api/auth/me`, {
+                headers: { 
+                    Authorization: `Bearer ${token}`,
+                    'X-Life-IO-Subdomain': user.sites.b.subdomain 
+                }
+            });
+            
+            // Response should be 401 because user ID from Site A doesn't exist in Site B's isolated DB
+            expect(res.status()).toBe(401);
+            await page.close();
+        });
     });
-    expect(resA.status()).toBe(200);
-    const jsonA = (await resA.json()) as AuthMeResponse;
-    
-    // Explicit null check for linter safety
-    expect(jsonA.tenant).not.toBeNull();
-    expect(jsonA.tenant?.id).toBe(user.sites.a.id);
-
-    // 2. Verify API Access to Site B (Allowed, Different Tenant)
-    const resB = await page.request.get(`http://127.0.0.1:42069/api/auth/me`, {
-        headers: { 
-            Authorization: `Bearer ${token}`,
-            'X-Life-IO-Subdomain': user.sites.b.subdomain
-        }
-    });
-    expect(resB.status()).toBe(200);
-    const jsonB = (await resB.json()) as AuthMeResponse;
-    
-    expect(jsonB.tenant).not.toBeNull();
-    expect(jsonB.tenant?.id).toBe(user.sites.b.id);
-    expect(jsonB.tenant?.id).not.toBe(jsonA.tenant?.id);
-
-    // 3. Verify API Access to Site C (Forbidden)
-    const resC = await page.request.get(`http://127.0.0.1:42069/api/auth/me`, {
-        headers: { 
-            Authorization: `Bearer ${token}`,
-            'X-Life-IO-Subdomain': user.sites.c.subdomain
-        }
-    });
-    // Should be 403 Forbidden because user is not a member of Site C
-    expect(resC.status()).toBe(403);
-  });
-});

@@ -1,13 +1,14 @@
 // FILE: scripts/test-provisioning.ts
 import { Effect, Exit } from "effect";
 import { sql } from "kysely";
-import { centralDb } from "../src/db/client";
+import { centralDb, getUserDb, type TenantConfig } from "../src/db/client";
 import { provisionTenant } from "../src/features/auth/auth.service";
-import { getTenantConnection } from "../src/db/connection-manager";
+import { getTenantConnection, closeAllConnections } from "../src/db/connection-manager";
 import { v4 as uuidv4 } from "uuid";
 import type { UserId } from "../src/lib/shared/schemas";
 import type { ConsultancyId } from "../src/types/generated/central/public/Consultancy";
 import type { TenantId } from "../src/types/generated/central/public/Tenant";
+import { PERMISSIONS } from "../src/lib/shared/permissions";
 
 const args = Bun.argv.slice(2);
 const strategy = args.includes("--database") ? "database" : "schema";
@@ -27,32 +28,18 @@ const testProvisioning = Effect.gen(function* () {
   let schemaName: string | null = null;
 
   if (strategy === "database") {
-      databaseName = `user_${userId.replace(/-/g, "")}`;
+      databaseName = `test_db_${tenantId.replace(/-/g, "")}`;
   } else {
-      schemaName = `user_${userId}`;
+      schemaName = `test_schema_${tenantId.replace(/-/g, "")}`;
   }
 
-  yield* Effect.logInfo(`1. Creating Hierarchy for: ${email}`);
+  yield* Effect.logInfo(`1. Creating Routing Entry for: ${subdomain}`);
 
-  // 2. Insert Hierarchy
-  // User (Global Identity)
+  // 2. Insert Central Routing Data (Only Tenant & Consultancy)
   yield* Effect.tryPromise(() =>
     centralDb
-      .insertInto("user")
-      .values({
-        id: userId,
-        email: email,
-        password_hash: "placeholder_hash",
-        email_verified: true,
-        permissions: [],
-        created_at: new Date()
-      })
-      .execute()
-  );
-
-  // Consultancy
-  yield* Effect.tryPromise(() =>
-    centralDb.insertInto("consultancy")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insertInto("consultancy" as any)
       .values({
           id: consultancyId,
           name: "Test Consultancy",
@@ -61,9 +48,10 @@ const testProvisioning = Effect.gen(function* () {
       .execute()
   );
 
-  // Tenant (Configuration lives here now)
   yield* Effect.tryPromise(() =>
-    centralDb.insertInto("tenant")
+    centralDb
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insertInto("tenant" as any)
       .values({
           id: tenantId,
           consultancy_id: consultancyId,
@@ -77,89 +65,72 @@ const testProvisioning = Effect.gen(function* () {
       .execute()
   );
 
-  // Membership
-  yield* Effect.tryPromise(() =>
-    centralDb.insertInto("tenant_membership")
-      .values({
-          user_id: userId,
-          tenant_id: tenantId,
-          role: "OWNER",
-          joined_at: new Date()
-      })
-      .execute()
-  );
-
-  yield* Effect.logInfo("2. Hierarchy inserted. Starting Provisioning...");
+  yield* Effect.logInfo("2. Routing ready. Starting Infrastructure Provisioning...");
 
   // 3. Run the Provisioning Logic (Physical Resource Creation)
-  // We pass the resource name explicitly now
   const resourceName = strategy === 'database' ? databaseName : schemaName;
-   
   yield* provisionTenant(userId, strategy, resourceName!);
 
-  // 4. Verification
+  // 4. Verification & User Insertion
+  const tenantConfig: TenantConfig = {
+      id: tenantId,
+      tenant_strategy: strategy,
+      database_name: databaseName,
+      schema_name: schemaName
+  };
+
+  const tenantDb = getUserDb(tenantConfig);
+
+  yield* Effect.logInfo("3. Connecting to Tenant DB to insert Admin User...");
+
+  // Insert User into Tenant DB
+  yield* Effect.tryPromise(() => 
+      tenantDb.insertInto("user")
+        .values({
+            id: userId,
+            email: email,
+            password_hash: "hash",
+            email_verified: true,
+            permissions: Object.values(PERMISSIONS),
+            created_at: new Date()
+        })
+        .execute()
+  );
+
+  // Verify User Exists
+  const user = yield* Effect.tryPromise(() => 
+      tenantDb.selectFrom("user").selectAll().where("id", "=", userId).executeTakeFirst()
+  );
+
+  if (!user) {
+      yield* Effect.fail(new Error("❌ Failed to verify user in tenant DB"));
+  }
+  yield* Effect.logInfo(`✅ User verified in ${strategy === 'database' ? databaseName : schemaName}`);
+
+  // 5. Cleanup
+  yield* Effect.logInfo("4. Cleaning up...");
+
   if (strategy === "database" && databaseName) {
-      yield* Effect.logInfo(`3. Verifying Database "${databaseName}"...`);
-      const tenantDb = getTenantConnection(databaseName);
-      try {
-          const tables = yield* Effect.promise(() => 
-            sql<{ table_name: string }>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`.execute(tenantDb)
-          );
-          const tableNames = tables.rows.map((r) => r.table_name);
-          yield* Effect.logInfo(`   Found tables: ${tableNames.join(", ")}`);
-          
-          if (!tableNames.includes("note")) throw new Error("Missing 'note' table");
-          yield* Effect.logInfo("✅ Database verification successful.");
-      } finally {
-          yield* Effect.promise(() => tenantDb.destroy());
-      }
-      
-      // Cleanup DB
-      yield* Effect.logInfo("   Cleaning up database...");
+      yield* Effect.promise(() => tenantDb.destroy());
       yield* Effect.promise(() => sql.raw(`DROP DATABASE "${databaseName}"`).execute(centralDb));
-
   } else if (schemaName) {
-      yield* Effect.logInfo(`3. Verifying schema "${schemaName}"...`);
-
-      const tables = yield* Effect.tryPromise(() =>
-        sql<{ table_name: string }>`
-          SELECT table_name 
-          FROM information_schema.tables 
-          WHERE table_schema = ${schemaName}
-          ORDER BY table_name;
-        `.execute(centralDb)
-      );
-
-      const tableNames = tables.rows.map((r) => r.table_name);
-      
-      yield* Effect.logInfo(`   Found tables: ${tableNames.join(", ")}`);
-
-      const expectedTables = ["note", "block", "task", "replicache_client"];
-      const missing = expectedTables.filter((t) => !tableNames.includes(t));
-
-      if (missing.length > 0) {
-        yield* Effect.fail(new Error(`❌ Missing expected tables in tenant schema: ${missing.join(", ")}`));
-      }
-      
-      // Cleanup Schema
-      yield* Effect.logInfo("   Cleaning up schema...");
-      yield* Effect.promise(() => sql`DROP SCHEMA ${sql.ref(schemaName)} CASCADE`.execute(centralDb));
+      yield* Effect.promise(() => sql`DROP SCHEMA IF EXISTS ${sql.ref(schemaName)} CASCADE`.execute(centralDb));
   }
 
-  // Cleanup Records
-  yield* Effect.promise(() => centralDb.deleteFrom("tenant_membership").where("user_id", "=", userId).execute());
-  yield* Effect.promise(() => centralDb.deleteFrom("tenant").where("id", "=", tenantId).execute());
-  yield* Effect.promise(() => centralDb.deleteFrom("consultancy").where("id", "=", consultancyId).execute());
-  yield* Effect.promise(() => centralDb.deleteFrom("user").where("id", "=", userId).execute());
+  yield* Effect.tryPromise(() => centralDb.deleteFrom("tenant").where("id", "=", tenantId).execute());
+  yield* Effect.tryPromise(() => centralDb.deleteFrom("consultancy").where("id", "=", consultancyId).execute());
 
   yield* Effect.logInfo("✅ SUCCESS: Provisioning test passed!");
 });
 
 // Run it
 void Effect.runPromiseExit(testProvisioning).then((exit) => {
-  if (Exit.isFailure(exit)) {
-    console.error(exit);
-    process.exit(1);
-  }
-  process.exit(0);
+  // Ensure connections close so script exits
+  void closeAllConnections().then(() => {
+    if (Exit.isFailure(exit)) {
+        console.error(exit);
+        process.exit(1);
+    }
+    process.exit(0);
+  });
 });

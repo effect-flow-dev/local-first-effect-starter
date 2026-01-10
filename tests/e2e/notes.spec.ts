@@ -1,81 +1,66 @@
-// FILE: tests/e2e/notes.spec.ts
-import { test, expect } from "@playwright/test";
-import { createVerifiedUser, cleanupUser } from "./utils/seed";
+ import { test, expect } from "@playwright/test";
+    import { createVerifiedUser, cleanupUser } from "./utils/seed";
 
-test.describe("Notes & Sync Core", () => {
-  let user: { email: string; password: string; userId: string };
+    test.describe("Notes & Sync Core", () => {
+        let user: Awaited<ReturnType<typeof createVerifiedUser>>;
 
-  test.beforeAll(async () => {
-    user = await createVerifiedUser();
-  });
+        test.beforeAll(async () => {
+            user = await createVerifiedUser();
+        });
 
-  test.afterAll(async () => {
-    // ✅ FIX: Check if user exists before cleanup
-    if (user) {
-      await cleanupUser(user.userId);
-    }
-  });
+        test.afterAll(async () => {
+            if (user) {
+                await cleanupUser(user);
+            }
+        });
 
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/login");
-    await page.fill('input[id="email"]', user.email);
-    await page.fill('input[id="password"]', user.password);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/.*\/$/);
-  });
+        test.beforeEach(async ({ page }) => {
+            // ✅ FIX: Navigate to the tenant subdomain to Login
+            await page.goto(`http://${user.subdomain}.localhost:3000/login`);
+            await page.fill('input[id="email"]', user.email);
+            await page.fill('input[id="password"]', user.password);
+            await page.click('button[type="submit"]');
+            
+            // Wait for successful auth redirect at the subdomain
+            await expect(page).toHaveURL(new RegExp(`http://${user.subdomain}\.localhost:3000/`));
+        });
 
-  test("Persistence: Created blocks should survive a page reload", async ({ page }) => {
-    test.setTimeout(90000);
+        test("Persistence: Created blocks should survive a page reload", async ({ page }) => {
+            test.setTimeout(90000);
 
-    // 1. Create Note
-    await page.click('button:has-text("Create New Note")');
-    await expect(page).toHaveURL(/\/notes\/[a-f0-9-]+/);
-    
-    const titleInput = page.getByTestId("note-title-input");
-    await titleInput.fill("E2E Block Test");
-    // ✅ FIX: Use global sync status
-    await expect(page.locator("sync-status")).toContainText("Saved");
-    
-    // 2. Type in the first block (Default Text Block)
-    // In new architecture, we have multiple editors. We target the first one.
-    const firstEditor = page.locator("tiptap-editor").first().locator(".ProseMirror");
-    await firstEditor.click();
-    await page.keyboard.type("First block content");
-    // ✅ FIX: Use global sync status
-    await expect(page.locator("sync-status")).toContainText("Saved");
+            // 1. Create Note
+            await page.click('button:has-text("Create New Note")');
+            await expect(page).toHaveURL(/\/notes\/[a-f0-9-]+/);
+            
+            const titleInput = page.getByTestId("note-title-input");
+            await titleInput.fill("E2E Block Test");
+            await expect(page.locator("sync-status")).toContainText("Saved");
+            
+            // 2. Type in the first block
+            const firstEditor = page.locator("tiptap-editor").first().locator(".ProseMirror");
+            await firstEditor.click();
+            await page.keyboard.type("First block content");
+            await expect(page.locator("sync-status")).toContainText("Saved");
 
-    // 3. Add a Checklist Block using the FAB
-    // Open FAB menu
-    await page.locator('button[title="Add Block"]').click();
-    // Click 'Checklist' option
-    await page.locator('button:has-text("Checklist")').click();
+            // 3. Add a Checklist Block
+            await page.locator('button[title="Add Block"]').click();
+            await page.locator('button:has-text("Checklist")').click();
 
-    // Verify Checklist appears
-    const checklist = page.locator("smart-checklist");
-    await expect(checklist).toBeVisible();
+            const checklist = page.locator("smart-checklist");
+            await expect(checklist).toBeVisible();
 
-    // Interact with Checklist (Toggle item)
-    // The default checklist item is "New Item"
-    await checklist.locator("text=New Item").click();
-    // Wait for save
-    // ✅ FIX: Use global sync status
-    await expect(page.locator("sync-status")).toContainText("Saved");
+            await checklist.locator("text=New Item").click();
+            await expect(page.locator("sync-status")).toContainText("Saved");
 
-    // 4. Reload
-    await page.reload();
+            // 4. Reload
+            await page.reload();
 
-    // 5. Verify Persistence
-    // Title
-    await expect(titleInput).toHaveValue("E2E Block Test");
-    
-    // First Block Text
-    await expect(page.locator("tiptap-editor").first()).toContainText("First block content");
-    
-    // Checklist Block Existence
-    await expect(page.locator("smart-checklist")).toBeVisible();
-    
-    // Checklist State (Should still be green/checked if persistence worked)
-    // We check for the class 'bg-green-50' which indicates checked state in our component
-    await expect(page.locator("smart-checklist .bg-green-50")).toBeVisible();
-  });
-});
+            // 5. Verify Persistence
+            await expect(titleInput).toHaveValue("E2E Block Test");
+            await expect(page.locator("tiptap-editor").first()).toContainText("First block content");
+            await expect(page.locator("smart-checklist")).toBeVisible();
+            await expect(page.locator("smart-checklist .bg-green-50")).toBeVisible();
+
+            await page.close();
+        });
+    });
