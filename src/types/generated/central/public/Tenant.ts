@@ -21,9 +21,9 @@ export default interface TenantTable {
 
   database_name: ColumnType<string | null, string | null, string | null>;
 
-  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
-
   schema_name: ColumnType<string | null, string | null, string | null>;
+
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 export type Tenant = Selectable<TenantTable>;
