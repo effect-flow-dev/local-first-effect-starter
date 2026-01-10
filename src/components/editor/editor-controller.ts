@@ -6,30 +6,19 @@ import { deepEqual } from "../../lib/client/logic/deep-equal";
 import { clientLog } from "../../lib/client/clientLog";
 import { runClientUnscoped } from "../../lib/client/runtime";
 import { getExtensions, brokenLinkPluginKey } from "./extensions";
+import { incrementDirtyEditors, decrementDirtyEditors } from "../../lib/client/stores/syncStore";
 
 export interface EditorControllerOptions {
-  /**
-   * The host element (Lit component) that this controller is attached to.
-   * Used for dispatching events and mounting the editor.
-   */
   element: HTMLElement;
-  /**
-   * Initial content for the editor. Can be a JSON object or string.
-   */
   initialContent: string | object;
-  /**
-   * The Block ID if this editor represents a specific block (for granular updates).
-   */
   blockId?: string;
-  /**
-   * Set of known note titles for wikilink validation.
-   */
   allNoteTitles?: Set<string>;
 }
 
 export class EditorController implements ReactiveController {
   public editor?: Editor;
   private isInternallyUpdating = false;
+  private isDirty = false;
   private _debounceTimer?: ReturnType<typeof setTimeout>;
   
   private host: ReactiveControllerHost;
@@ -46,20 +35,19 @@ export class EditorController implements ReactiveController {
   }
 
   hostDisconnected() {
+    // ✅ FIX: Flush pending changes on disconnect to survive page reloads
+    if (this._debounceTimer) {
+        clearTimeout(this._debounceTimer);
+        this._emitUpdate();
+        if (this.isDirty) {
+            this.isDirty = false;
+            decrementDirtyEditors();
+        }
+    }
     this.editor?.destroy();
-    if (this._debounceTimer) clearTimeout(this._debounceTimer);
   }
 
-  hostUpdated() {
-    // This is called after the host's update cycle.
-  }
-
-  /**
-   * Updates the editor options and synchronizes state if needed.
-   * Should be called by the host component's `updated` or `willUpdate` method.
-   */
   updateOptions(newOptions: Partial<EditorControllerOptions>) {
-    // Sync Note Titles (for BrokenLinkHighlighter)
     if (
       newOptions.allNoteTitles &&
       this.editor &&
@@ -72,26 +60,48 @@ export class EditorController implements ReactiveController {
       this.editor.view.dispatch(tr);
     }
 
-    // Sync Content
+    // ✅ FIX: Reject prop updates while local state is dirty (typing/debouncing)
+    // This prevents incoming syncs from reverting the cursor while the user is mid-sentence.
     if (
       newOptions.initialContent !== undefined &&
       this.editor &&
-      !this.isInternallyUpdating
+      !this.isInternallyUpdating &&
+      !this.isDirty
     ) {
       const newParsed = this._parseContent(newOptions.initialContent);
       const currentContent = this.editor.getJSON();
 
       if (!deepEqual(currentContent, newParsed)) {
         const { from, to } = this.editor.state.selection;
-        this.editor.commands.setContent(newParsed, {
-          emitUpdate: false,
-        });
-        this.editor.commands.setTextSelection({ from, to });
+        this.editor.commands.setContent(newParsed, { emitUpdate: false });
+        // Restore cursor
+        if (this.editor.isFocused) {
+            this.editor.commands.setTextSelection({ from, to });
+        }
       }
     }
 
-    // Merge options
     this.options = { ...this.options, ...newOptions };
+  }
+
+  private _emitUpdate() {
+    if (!this.editor || !this.options.blockId) return;
+
+    const content = this.editor.getJSON();
+    runClientUnscoped(
+        clientLog("debug", `[TiptapEditor] Dispatching block update for ${this.options.blockId}`)
+    );
+
+    this.options.element.dispatchEvent(
+        new CustomEvent("update-block", {
+            bubbles: true,
+            composed: true,
+            detail: {
+                blockId: this.options.blockId,
+                fields: { content },
+            },
+        }),
+    );
   }
 
   private initEditor() {
@@ -110,41 +120,27 @@ export class EditorController implements ReactiveController {
       },
       onUpdate: ({ editor }) => {
         this.isInternallyUpdating = true;
-
-        // Reset the internal update flag shortly after
-        setTimeout(() => {
-          this.isInternallyUpdating = false;
-        }, 0);
-
-        const content = editor.getJSON();
+        setTimeout(() => { this.isInternallyUpdating = false; }, 0);
 
         if (this.options.blockId) {
           if (this._debounceTimer) clearTimeout(this._debounceTimer);
 
+          // ✅ Track dirty state for sync indicator
+          if (!this.isDirty) {
+              this.isDirty = true;
+              incrementDirtyEditors();
+          }
+
           this._debounceTimer = setTimeout(() => {
-            runClientUnscoped(
-              clientLog(
-                "debug",
-                `[TiptapEditor] Emitting debounced block update for ${this.options.blockId}`,
-              ),
-            );
-            this.options.element.dispatchEvent(
-              new CustomEvent("update-block", {
-                bubbles: true,
-                composed: true,
-                detail: {
-                  blockId: this.options.blockId,
-                  fields: { content },
-                },
-              }),
-            );
-          }, 500); // 500ms Debounce
+            this._emitUpdate();
+            this.isDirty = false;
+            this._debounceTimer = undefined;
+            decrementDirtyEditors();
+          }, 500); 
         } else {
           this.options.element.dispatchEvent(
             new CustomEvent("update", {
-              detail: {
-                content,
-              },
+              detail: { content: editor.getJSON() },
             }),
           );
         }
@@ -154,42 +150,22 @@ export class EditorController implements ReactiveController {
 
   private _parseContent(content: string | object): JSONContent {
     if (!content) {
-      return {
-        type: "doc",
-        content: [{ type: "paragraph", content: [] }],
-      };
+      return { type: "doc", content: [{ type: "paragraph", content: [] }] };
     }
-
     if (typeof content === "object") {
       return content as JSONContent;
     }
-
-    const str = content.trim();
-
     try {
-      if (str.startsWith("{")) {
-        return JSON.parse(str) as JSONContent;
+      if (content.trim().startsWith("{")) {
+        return JSON.parse(content) as JSONContent;
       }
-    } catch {
-      // Not JSON
-    }
-
+    } catch {}
     return {
       type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: str }],
-        },
-      ],
+      content: [{ type: "paragraph", content: [{ type: "text", text: content }] }],
     };
   }
 
-  public focus() {
-    this.editor?.chain().focus().run();
-  }
-
-  public getJSON() {
-    return this.editor?.getJSON();
-  }
+  public focus() { this.editor?.chain().focus().run(); }
+  public getJSON() { return this.editor?.getJSON(); }
 }

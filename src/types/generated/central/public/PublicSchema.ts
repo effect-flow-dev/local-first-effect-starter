@@ -3,9 +3,12 @@
 
 import type { default as ConsultancyTable } from './Consultancy';
 import type { default as TenantTable } from './Tenant';
+import type { default as PlatformAdminTable } from './PlatformAdmin';
 
 export default interface PublicSchema {
   consultancy: ConsultancyTable;
 
   tenant: TenantTable;
+
+  platform_admin: PlatformAdminTable;
 }

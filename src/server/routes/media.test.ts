@@ -1,4 +1,4 @@
-// FILE: src/server/routes/media.test.ts
+// File: src/server/routes/media.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { mediaRoutes } from "./media";
 import { Effect } from "effect";
@@ -19,18 +19,36 @@ vi.mock("../../lib/server/JwtService", () => ({
   validateToken: mocks.validateToken,
 }));
 
+const validUser = {
+  id: "user-123" as UserId,
+  email: "media-test@test.com",
+  email_verified: true,
+  created_at: new Date(),
+  avatar_url: null,
+  permissions: [],
+};
+
+// --- Context Mocking ---
+// We mock the userContext middleware to return a controlled state.
+// This prevents the middleware from trying to query centralDb during route tests.
+const mockContextState = {
+    user: validUser,
+    userDb: {} as any,
+    tenant: null,
+    requestedSubdomain: null,
+    currentRole: "OWNER",
+    isPlatformAdmin: false
+};
+
+vi.mock("../context", () => ({
+  userContext: (app: any) => app.derive(() => mockContextState),
+  getRequestedSubdomain: vi.fn()
+}));
+
 vi.mock("../../db/client", () => ({
   getUserDb: mocks.getUserDb,
   centralDb: {} as any, 
 }));
-
-// Mock Data
-const validUser = {
-  id: "user-123" as UserId,
-  subdomain: "test-user",
-  tenant_strategy: "schema",
-  database_name: null,
-};
 
 describe("POST /api/media/upload", () => {
   beforeAll(() => {
@@ -61,6 +79,7 @@ describe("POST /api/media/upload", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockContextState.user = validUser; // Default to authed
     mocks.validateToken.mockReturnValue(Effect.succeed(validUser));
     mocks.getUserDb.mockReturnValue({} as any);
   });
@@ -81,20 +100,9 @@ describe("POST /api/media/upload", () => {
       body: formData,
     });
     
-    // Add auth header afterwards
     req.headers.set("Authorization", "Bearer valid-token");
 
-    // ✅ FIX: Safe header logging using forEach
-    const debugHeaders: Record<string, string> = {};
-    req.headers.forEach((v, k) => { debugHeaders[k] = v; });
-    console.log("[TEST DEBUG] Request Headers:", debugHeaders);
-
     const res = await mediaRoutes.handle(req);
-    
-    if (res.status !== 200) {
-        console.log("[TEST DEBUG] Failed Response Status:", res.status);
-        console.log("[TEST DEBUG] Failed Response Body:", await res.clone().text());
-    }
     
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -102,7 +110,6 @@ describe("POST /api/media/upload", () => {
   });
 
   it("Success: Returns 200 OK for GIF image", async () => {
-    // ✅ NEW TEST CASE: GIF Support
     const gifFile = new File(["GIF89a..."], "funny.gif", { type: "image/gif" });
     const formData = new FormData();
     formData.append("file", gifFile);
@@ -123,7 +130,9 @@ describe("POST /api/media/upload", () => {
     expect(json).toEqual({ url: "https://cdn.example.com/funny.gif" });
   });
 
-  it("Auth Check: Returns 401 Unauthorized if no token provided", async () => {
+  it("Auth Check: Returns 401 Unauthorized if no user in context", async () => {
+    mockContextState.user = null as any;
+
     const formData = new FormData();
     formData.append("file", new File(["a"], "a.png", { type: "image/png" }));
 

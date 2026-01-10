@@ -18,14 +18,12 @@ import { effectPlugin } from "./middleware/effect-plugin";
 import { alertWorkerLive } from "../features/alerts/alert.worker"; 
 import { serverRuntime } from "../lib/server/server-runtime";
 import { centralDb } from "../db/client";
-import { config } from "../lib/server/Config";
+import { getRequestedSubdomain } from "./context";
 import type { PublicUser } from "../lib/shared/schemas";
 
 // Start Background Alert Worker
 serverRuntime.runFork(alertWorkerLive);
 console.info("🚀 Background Alert Worker started.");
-
-// --- Types for WebSocket Context & Messages ---
 
 interface WsContext {
   user: PublicUser;
@@ -35,10 +33,6 @@ interface WsContext {
 interface FocusMessage {
   type: "focus";
   blockId: string;
-}
-
-interface TenantLookupResult {
-  id: string;
 }
 
 const isFocusMessage = (msg: unknown): msg is FocusMessage => {
@@ -90,7 +84,6 @@ const app = new Elysia()
       }
 
       if (!token) {
-        console.warn("[Server WS] Connection attempted without token.");
         ws.close();
         return;
       }
@@ -100,7 +93,6 @@ const app = new Elysia()
       );
 
       if (result._tag === "Left") {
-        console.warn("[Server WS] Token validation failed.");
         ws.close();
         return;
       }
@@ -109,39 +101,28 @@ const app = new Elysia()
 
       // --- Resolve Tenant Context ---
       let tenantId: string | null = null;
-      const host = ws.data.request.headers.get("host") || "";
+      const host = ws.data.request.headers.get("host");
       const headerSubdomain = ws.data.request.headers.get("x-life-io-subdomain");
       
-      const rootDomain = config.app.rootDomain;
-      let requestedSubdomain: string | null = null;
-
-      if (headerSubdomain) {
-        requestedSubdomain = headerSubdomain;
-      } else if (host.endsWith(`.${rootDomain}`)) {
-        requestedSubdomain = host.slice(0, -(rootDomain.length + 1));
-      }
+      // ✅ FIX: Use the shared robust extraction logic
+      const requestedSubdomain = headerSubdomain || getRequestedSubdomain(host);
 
       if (requestedSubdomain) {
         const tenant = await centralDb
           .withSchema("public")
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .selectFrom("tenant" as any)
+          .selectFrom("tenant")
           .select("id")
           .where("subdomain", "=", requestedSubdomain)
           .executeTakeFirst();
         
         if (tenant) {
-            // Explicitly cast to internal type to satisfy linter
-            tenantId = (tenant as unknown as TenantLookupResult).id;
+            tenantId = tenant.id;
         }
       }
       
-      console.log(`[Server WS] Connected: ${user.id} (Tenant: ${tenantId || "Global"})`);
+      console.log(`[Server WS] Connected: ${user.id} (Tenant: ${requestedSubdomain || "Global"})`);
 
-      // Subscribe User & Register Session
       const stream = subscribe(user.id, tenantId);
-
-      // Store typed context
       ws.data.store = { user, tenantId };
 
       Effect.runFork(
@@ -154,15 +135,12 @@ const app = new Elysia()
     
     async message(ws, message) {
         try {
-            // Cast to WsContext to ensure safety when accessing user/tenantId
             const ctx = ws.data.store as WsContext;
             if (!ctx || !ctx.tenantId) return;
 
-            // ✅ FIX: Cast result to unknown to prevent 'any' assignment error
             const rawPayload = (typeof message === 'string' ? JSON.parse(message) : message) as unknown;
             
             if (isFocusMessage(rawPayload)) {
-                // Broadcast 'presence' event to everyone in this tenant
                 const presenceMsg = {
                     type: 'presence',
                     userId: ctx.user.id,

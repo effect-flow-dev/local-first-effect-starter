@@ -1,3 +1,4 @@
+// FILE: tests/e2e/utils/seed.ts
 import { Kysely, PostgresDialect, sql, Migrator } from "kysely";
 import { Pool } from "pg";
 import { Argon2id } from "oslo/password";
@@ -164,7 +165,7 @@ export const createMultiTenantUser = async () => {
 
 /**
  * ✅ FIX: Isolated Cleanup
- * Only deletes the specific tenant, consultancy, and schema for the calling test.
+ * Removes 'any' casts by using proper string conversion where needed.
  */
 export const cleanupUser = async (data: { 
     tenantId?: string, 
@@ -184,13 +185,13 @@ export const cleanupUser = async (data: {
 
   // 2. Delete Central Records for this test only
   if (data.tenantId) {
-      await db.deleteFrom("tenant").where("id", "=", data.tenantId as any).execute();
+      await db.deleteFrom("tenant").where("id", "=", data.tenantId as TenantId).execute();
   }
   if (data.sites) {
-       const ids = Object.values(data.sites).map(s => s.id);
-       await db.deleteFrom("tenant").where("id", "in", ids as any).execute();
+       const ids = Object.values(data.sites).map(s => s.id as TenantId);
+       await db.deleteFrom("tenant").where("id", "in", ids).execute();
   }
   if (data.consultancyId) {
-      await db.deleteFrom("consultancy").where("id", "=", data.consultancyId as any).execute();
+      await db.deleteFrom("consultancy").where("id", "=", data.consultancyId as ConsultancyId).execute();
   }
 };

@@ -3,7 +3,7 @@ import { Effect, Exit } from "effect";
 import { sql } from "kysely";
 import { centralDb, getUserDb, type TenantConfig } from "../src/db/client";
 import { provisionTenant } from "../src/features/auth/auth.service";
-import { getTenantConnection, closeAllConnections } from "../src/db/connection-manager";
+import { closeAllConnections } from "../src/db/connection-manager";
 import { v4 as uuidv4 } from "uuid";
 import type { UserId } from "../src/lib/shared/schemas";
 import type { ConsultancyId } from "../src/types/generated/central/public/Consultancy";
