@@ -6,10 +6,12 @@ import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import { randomUUID } from "node:crypto";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
 // ✅ FIX: Import Branded Types for DB Inserts
-import type { TaskId } from "#src/types/generated/tenant/tenant_template/Task";
-import type { PushSubscriptionId } from "#src/types/generated/tenant/tenant_template/PushSubscription";
+import type { TaskId } from "../../types/generated/tenant/tenant_template/Task";
+import type { PushSubscriptionId } from "../../types/generated/tenant/tenant_template/PushSubscription";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
+
+const TEST_HLC = "1736612345000:0001:TEST";
 
 // --- Mocks ---
 const { mockSendPushNotification } = vi.hoisted(() => ({
@@ -104,6 +106,8 @@ describe("Alert Worker (Integration)", () => {
             version: 1,
             created_at: new Date(),
             updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
           })
           .execute()
       );
@@ -126,6 +130,8 @@ describe("Alert Worker (Integration)", () => {
             version: 1,
             created_at: new Date(),
             updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
           })
           .execute()
       );
@@ -143,6 +149,8 @@ describe("Alert Worker (Integration)", () => {
             alert_sent_at: opts.alertSent ? new Date() : null,
             created_at: new Date(),
             updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
           })
           .execute()
       );

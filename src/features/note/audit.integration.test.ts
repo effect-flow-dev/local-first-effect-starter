@@ -9,6 +9,8 @@ import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 import { VersionConflictError } from "./Errors";
 
+const TEST_HLC = "1736612345000:0001:TEST";
+
 describe("Audit & Optimistic Locking (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
@@ -55,7 +57,9 @@ describe("Audit & Optimistic Locking (Integration)", () => {
       yield* Effect.promise(() =>
         db.insertInto("note").values({
             id: noteId, user_id: userId, title: "Test Note", content: { type: "doc", content: [] },
-            version: 1, created_at: new Date(), updated_at: new Date()
+            version: 1, created_at: new Date(), updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
         }).execute()
       );
 
@@ -63,7 +67,9 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         db.insertInto("block").values({
             id: blockId, note_id: noteId, user_id: userId, type: "task", content: "",
             fields: { is_complete: false }, version: 1, file_path: "", depth: 0, order: 0,
-            tags: [], links: [], transclusions: [], created_at: new Date(), updated_at: new Date()
+            tags: [], links: [], transclusions: [], created_at: new Date(), updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
         }).execute()
       );
 
@@ -82,7 +88,8 @@ describe("Audit & Optimistic Locking (Integration)", () => {
             fields: { is_complete: true },
             version: 1,
           },
-          userId
+          userId,
+          "1736612346000:0001:TEST" // ✅ Uses HLC string
         );
 
         const block = yield* Effect.promise(() =>
@@ -106,7 +113,7 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         const { blockId } = yield* setupNoteWithBlock(user1);
 
         // 1. User 1 Updates successfully
-        yield* handleUpdateBlock(db, { blockId, fields: { is_complete: true }, version: 1 }, user1);
+        yield* handleUpdateBlock(db, { blockId, fields: { is_complete: true }, version: 1 }, user1, "1736612347000:0001:U1");
 
         const blockV2 = yield* Effect.promise(() =>
             db.selectFrom("block").select("version").where("id", "=", blockId).executeTakeFirstOrThrow()
@@ -115,7 +122,7 @@ describe("Audit & Optimistic Locking (Integration)", () => {
 
         // 2. User 2 Tries to Update with STALE version
         const attempt = yield* Effect.either(
-            handleUpdateBlock(db, { blockId, fields: { is_complete: false }, version: 1 }, user2)
+            handleUpdateBlock(db, { blockId, fields: { is_complete: false }, version: 1 }, user2, "1736612348000:0001:U2")
         );
 
         expect(Either.isLeft(attempt)).toBe(true);
@@ -124,7 +131,8 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         }
 
         const history = yield* Effect.promise(() =>
-            db.selectFrom("block_history").selectAll().where("block_id", "=", blockId).orderBy("timestamp", "asc").execute()
+            // ✅ FIX: Sorted by hlc_timestamp instead of timestamp
+            db.selectFrom("block_history").selectAll().where("block_id", "=", blockId).orderBy("hlc_timestamp", "asc").execute()
         );
 
         expect(history).toHaveLength(2);

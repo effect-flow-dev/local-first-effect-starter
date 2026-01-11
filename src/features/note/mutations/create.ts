@@ -3,7 +3,6 @@ import { Effect, Schema } from "effect";
 import { type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
 import { NoteDatabaseError } from "../Errors";
-import { getNextGlobalVersion } from "../../replicache/versioning";
 import { logBlockHistory } from "../history.utils";
 import { CreateNoteArgsSchema } from "../note.schemas";
 import {
@@ -21,14 +20,10 @@ import { v4 as uuidv4 } from "uuid";
 export const handleCreateNote = (
     db: Kysely<Database> | Transaction<Database>,
     args: Schema.Schema.Type<typeof CreateNoteArgsSchema>,
+    globalVersion: string 
 ) =>
     Effect.gen(function* () {
-        yield* Effect.logInfo(
-            "[handleCreateNote] Mutation triggered for title: " + args.title,
-        );
-
-        const globalVersion = yield* getNextGlobalVersion(db);
-        const deviceTime = args.deviceCreatedAt || new Date();
+        const deviceTime = args.deviceTimestamp || new Date();
 
         let finalTitle = args.title;
         let counter = 2;
@@ -48,10 +43,6 @@ export const handleCreateNote = (
                 isChecking = false;
             } else {
                 finalTitle = args.title + " (" + counter++ + ")";
-                yield* Effect.logInfo(
-                    "[handleCreateNote] Title collision found. Using incremented title: " +
-                        finalTitle,
-                );
             }
         }
 
@@ -59,16 +50,12 @@ export const handleCreateNote = (
         let blocksToInsert: ParsedBlock[] = [];
 
         if (args.template && args.template.length > 0) {
-            yield* Effect.logInfo(
-                "[handleCreateNote] Building note from template items...",
-            );
             const tiptapNodes: (TiptapParagraphNode | InteractiveBlock)[] = [];
             let order = 0;
 
             for (const item of args.template) {
                 const blockId = uuidv4() as BlockId;
 
-                // ✅ FIX: item is already typed via CreateNoteArgsSchema. No need for TemplateItemSchema import.
                 blocksToInsert.push({
                     id: blockId,
                     note_id: args.id,
@@ -108,10 +95,7 @@ export const handleCreateNote = (
             }
             content = { type: "doc", content: tiptapNodes };
         } else {
-            yield* Effect.logInfo(
-                "[handleCreateNote] No template. Initializing with default paragraph.",
-            );
-            const firstBlockId = args.initialBlockId || uuidv4();
+            const firstBlockId = (args.initialBlockId as BlockId) || (uuidv4() as BlockId);
             content = {
                 type: "doc",
                 content: [
@@ -134,7 +118,7 @@ export const handleCreateNote = (
                         created_at: new Date(),
                         updated_at: new Date(),
                         device_created_at: deviceTime,
-                        global_version: String(globalVersion),
+                        global_version: globalVersion,
                         notebook_id: args.notebookId || null,
                     })
                     .execute(),
@@ -142,16 +126,12 @@ export const handleCreateNote = (
         });
 
         if (blocksToInsert.length > 0) {
-            yield* Effect.logInfo(
-                `[handleCreateNote] Persisting ${blocksToInsert.length} child blocks.`,
-            );
-
             const enrichedBlocks = blocksToInsert.map((b) => ({
                 ...b,
                 created_at: new Date(),
                 updated_at: new Date(),
                 device_created_at: deviceTime,
-                global_version: String(globalVersion),
+                global_version: globalVersion,
                 fields: JSON.stringify(b.fields),
                 latitude: args.latitude ?? null,
                 longitude: args.longitude ?? null,
@@ -169,7 +149,7 @@ export const handleCreateNote = (
             userId: args.userID,
             mutationType: "createNote",
             args: args,
+            hlcTimestamp: globalVersion,
+            deviceTimestamp: deviceTime,
         });
-
-        yield* Effect.logInfo("[handleCreateNote] Success.");
     });

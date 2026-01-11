@@ -24,7 +24,7 @@ export default interface NoteTable {
 
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 
-  global_version: ColumnType<string, string | undefined, string>;
+  global_version: ColumnType<string, string, string>;
 
   notebook_id: ColumnType<NotebookId | null, NotebookId | null, NotebookId | null>;
 

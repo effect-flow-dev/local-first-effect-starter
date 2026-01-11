@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 
+const TEST_HLC = "1736612345000:0001:TEST";
 const NOTE_ID = randomUUID() as NoteId;
 const BLOCK_ID_1 = randomUUID() as BlockId;
 const BLOCK_ID_2 = randomUUID() as BlockId;
@@ -32,7 +33,6 @@ describe("TaskService (Integration)", () => {
 
   const seedData = (blocks: Array<{ id: BlockId; content: string }>) =>
     Effect.gen(function* () {
-      // ✅ Use validUserId
       yield* Effect.promise(() =>
         db
           .insertInto("note")
@@ -41,7 +41,9 @@ describe("TaskService (Integration)", () => {
             user_id: validUserId,
             title: "Test Note",
             content: {},
-            version: 1, created_at: new Date(), updated_at: new Date()
+            version: 1, created_at: new Date(), updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
           })
           .execute(),
       );
@@ -62,7 +64,9 @@ describe("TaskService (Integration)", () => {
                 order: 0,
                 fields: {},
                 tags: [], links: [], transclusions: [],
-                version: 1, created_at: new Date(), updated_at: new Date()
+                version: 1, created_at: new Date(), updated_at: new Date(),
+                // ✅ FIXED: Missing global_version
+                global_version: TEST_HLC
               })),
             )
             .execute(),
@@ -78,7 +82,8 @@ describe("TaskService (Integration)", () => {
           { id: BLOCK_ID_2, content: "- [ ] Buy Milk" },
         ]);
 
-        yield* syncTasksForNote(db, NOTE_ID, validUserId);
+        // ✅ FIXED: Added TEST_HLC argument
+        yield* syncTasksForNote(db, NOTE_ID, validUserId, TEST_HLC);
 
         const tasks = yield* Effect.promise(() =>
           db
@@ -103,7 +108,8 @@ describe("TaskService (Integration)", () => {
       Effect.gen(function* () {
         yield* seedData([{ id: BLOCK_ID_1, content: "- [x] Finished Job" }]);
 
-        yield* syncTasksForNote(db, NOTE_ID, validUserId);
+        // ✅ FIXED: Added TEST_HLC argument
+        yield* syncTasksForNote(db, NOTE_ID, validUserId, TEST_HLC);
 
         const tasks = yield* Effect.promise(() =>
           db.selectFrom("task").selectAll().execute(),

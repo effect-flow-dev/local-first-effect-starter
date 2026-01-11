@@ -1,5 +1,4 @@
-// FILE: src/features/replicache/pull.ts
-// ------------------------
+// File: src/features/replicache/pull.ts
 import { Effect, Schema } from "effect";
 import { TreeFormatter } from "effect/ParseResult";
 import { sql, type Kysely } from "kysely";
@@ -33,8 +32,10 @@ export const handlePull = (
     );
 
     const { clientGroupID, cookie, filter } = validatedReq;
-    const requestCookie = typeof cookie === "number" ? cookie : 0;
-    const isFreshSync = !cookie || cookie === 0;
+    
+    // Polished HLC Cookie Handling
+    const requestCookie = cookie ?? 0;
+    const isFreshSync = !cookie || cookie === 0 || cookie === "0";
     
     return yield* Effect.tryPromise({
       try: () =>
@@ -43,17 +44,16 @@ export const handlePull = (
              await sql`SET search_path TO ${sql.ref(schemaName)}, public`.execute(trx);
           }
 
-          // ✅ FIX: Wrap version check in a safety check. 
-          // If the sequence is missing, the tenant isn't ready.
-          let currentGlobalVersion = 0;
+          let currentGlobalVersion: string = "0";
           try {
               currentGlobalVersion = await Effect.runPromise(getCurrentGlobalVersion(trx));
           } catch (e) {
-              const err = e as { message?: string };
-              if (err.message?.includes("relation") && err.message?.includes("does not exist")) {
+              const err = e as { message?: string, code?: string };
+              // ✅ Robustness: Handle race condition where schema exists but tables don't yet
+              if (err.code === "42P01" || (err.message?.includes("relation") && err.message?.includes("does not exist"))) {
                   console.warn(`[Pull] Tenant schema ${schemaName} not ready. Returning empty patch.`);
                   return {
-                      cookie: 0,
+                      cookie: "0",
                       lastMutationIDChanges: {},
                       patch: []
                   } as PullResponse;
@@ -61,6 +61,8 @@ export const handlePull = (
               throw e;
           }
 
+          // HLC Comparison Logic
+          // "1736...:0001:USER" > "0" works lexicographically
           if (requestCookie > currentGlobalVersion) {
               throw new ClientStateNotFoundError();
           }
@@ -86,9 +88,15 @@ export const handlePull = (
             clients.map((c) => [c.id, c.last_mutation_id]),
           );
 
+          // For delta queries, handlers expect a number (sinceVersion).
+          // We extract the physical timestamp part of the HLC for numeric comparisons.
+          const numericSince = typeof requestCookie === "number" 
+            ? requestCookie 
+            : parseInt(String(requestCookie).split(":")[0] || "0", 10);
+
           const patchPromises = syncableEntities.map((entity) => 
             Effect.runPromise(
-              entity.getPatchOperations(trx, user.id, requestCookie, filter)
+              entity.getPatchOperations(trx, user.id, numericSince, filter)
             )
           );
           
@@ -109,7 +117,6 @@ export const handlePull = (
         if (error instanceof ClientStateNotFoundError) {
             return error; 
         }
-        // ✅ Log clearly but don't crash the server
         console.error("[Replicache] Pull Failed:", error instanceof Error ? error.message : error);
         return new PullError({ cause: error });
       },

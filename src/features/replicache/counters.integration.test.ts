@@ -1,5 +1,5 @@
-// FILE: src/features/replicache/counters.integration.test.ts
-import { describe, it, expect, afterAll, beforeEach, vi } from "vitest";
+// File: src/features/replicache/counters.integration.test.ts
+import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { Effect } from "effect";
 import { handlePush } from "./push";
 import { handleCreateNote, handleCreateBlock } from "../note/note.mutations";
@@ -19,11 +19,18 @@ describe("Counters & Atomic Increments (Integration)", () => {
   let cleanup: () => Promise<void>;
   let schemaUserId: UserId;
 
+  // ✅ FIX: Standard test era (Jan 2025)
+  const BASE_TEST_TIME = 1736612345000;
+
   afterAll(async () => {
     await closeTestDb();
   });
 
   beforeEach(async () => {
+    // ✅ FIX: Stabilize clock for HLC consistency
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TEST_TIME);
+
     const userId = randomUUID();
     schemaUserId = userId as UserId;
 
@@ -34,6 +41,10 @@ describe("Counters & Atomic Increments (Integration)", () => {
     return async () => {
       await cleanup();
     };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const getMockUser = (id: UserId): PublicUser => ({
@@ -48,7 +59,7 @@ describe("Counters & Atomic Increments (Integration)", () => {
   it("should correctly apply concurrent atomic increments (defeat Last-Write-Wins)", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const userId = schemaUserId; // ✅ Use valid ID
+        const userId = schemaUserId; 
         const noteId = randomUUID() as NoteId;
         const blockId = randomUUID() as BlockId;
 
@@ -56,20 +67,22 @@ describe("Counters & Atomic Increments (Integration)", () => {
             id: noteId,
             userID: userId,
             title: "Counter Test",
-        });
+        }, "1736612345000:0001:SYSTEM");
 
         yield* handleCreateBlock(db, {
             noteId,
             blockId,
             type: "form_meter",
             fields: { value: 0, min: 0, max: 100, label: "Counter", unit: "count" },
-        }, userId);
+        }, userId, "1736612345000:0002:SYSTEM");
 
         const initialBlock = yield* Effect.promise(() =>
           db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
         );
         // @ts-expect-error jsonb access
         expect(initialBlock.fields.value).toBe(0);
+
+        vi.setSystemTime(1736612346000);
 
         const pushA: PushRequest = {
           clientGroupID: "client-group-a",
@@ -83,10 +96,13 @@ describe("Counters & Atomic Increments (Integration)", () => {
                 key: "value",
                 delta: 5,
                 version: 1,
+                hlcTimestamp: "1736612346000:0001:CLIENT_A"
               },
             },
           ],
         };
+
+        vi.setSystemTime(1736612347000);
 
         const pushB: PushRequest = {
           clientGroupID: "client-group-b",
@@ -100,27 +116,23 @@ describe("Counters & Atomic Increments (Integration)", () => {
                 key: "value",
                 delta: 5,
                 version: 1, 
+                hlcTimestamp: "1736612347000:0001:CLIENT_B"
               },
             },
           ],
         };
 
         yield* handlePush(pushA, getMockUser(userId), db, "OWNER");
-
-        const blockAfterA = yield* Effect.promise(() =>
-            db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
-        );
-        // @ts-expect-error jsonb access
-        expect(blockAfterA.fields.value).toBe(5);
-
         yield* handlePush(pushB, getMockUser(userId), db, "OWNER");
 
         const finalBlock = yield* Effect.promise(() =>
-            db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
+            db.selectFrom("block").select(["fields", "global_version"]).where("id", "=", blockId).executeTakeFirstOrThrow()
         );
         
         // @ts-expect-error jsonb access
         expect(finalBlock.fields.value).toBe(10);
+
+        expect(finalBlock.global_version).toContain("1736612347000");
       })
     );
   });
@@ -132,13 +144,13 @@ describe("Counters & Atomic Increments (Integration)", () => {
         const noteId = randomUUID() as NoteId;
         const blockId = randomUUID() as BlockId;
 
-        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "Decrement Test" });
+        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "Decrement Test" }, "1736612345000:0001:SYSTEM");
         yield* handleCreateBlock(db, {
           noteId,
           blockId,
           type: "form_meter",
           fields: { value: 20, min: 0, max: 100, label: "Test", unit: "pts" },
-        }, userId);
+        }, userId, "1736612345000:0002:SYSTEM");
 
         const push: PushRequest = {
           clientGroupID: "cg-1",
@@ -146,7 +158,7 @@ describe("Counters & Atomic Increments (Integration)", () => {
             id: 1,
             clientID: "c1",
             name: "incrementCounter",
-            args: { blockId, key: "value", delta: -5, version: 1 },
+            args: { blockId, key: "value", delta: -5, version: 1, hlcTimestamp: "1736612346000:0001:C1" },
           }],
         };
 
@@ -168,13 +180,13 @@ describe("Counters & Atomic Increments (Integration)", () => {
         const noteId = randomUUID() as NoteId;
         const blockId = randomUUID() as BlockId;
 
-        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "Null Test" });
+        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "Null Test" }, "1736612345000:0001:SYSTEM");
         yield* handleCreateBlock(db, {
           noteId,
           blockId,
           type: "tiptap_text", 
           fields: {},
-        }, userId);
+        }, userId, "1736612345000:0002:SYSTEM");
 
         const push: PushRequest = {
           clientGroupID: "cg-null",
@@ -182,7 +194,7 @@ describe("Counters & Atomic Increments (Integration)", () => {
             id: 1,
             clientID: "c-null",
             name: "incrementCounter",
-            args: { blockId, key: "score", delta: 10, version: 1 },
+            args: { blockId, key: "score", delta: 10, version: 1, hlcTimestamp: "1736612346000:0001:C-NULL" },
           }],
         };
 

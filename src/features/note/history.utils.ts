@@ -6,14 +6,12 @@ import type { NoteId, UserId, BlockId } from "../../lib/shared/schemas";
 import type { BlockHistoryId } from "../../types/generated/tenant/tenant_template/BlockHistory";
 import { NoteDatabaseError } from "./Errors";
 
-// Smart Session Merging Logic
-// If the same user updates the same block/note within this window, we update the existing history entry
-// instead of creating a new one. This keeps the history clean.
-// ✅ FIX: Set to 0 to DISABLE merging for now. 
-// Merging causes issues with Conflict Resolution where a "Rejected" update gets merged into a valid previous one,
-// tainting the history and breaking E2E tests that expect distinct entries.
-const SESSION_MERGE_WINDOW_MS = 0; // Was 20 * 60 * 1000
-
+/**
+ * logBlockHistory
+ * 
+ * Records an entry in the audit trail.
+ * Now requires HLC and Device timestamps to ensure causal integrity.
+ */
 export const logBlockHistory = (
   db: Kysely<Database> | Transaction<Database>,
   payload: {
@@ -23,47 +21,15 @@ export const logBlockHistory = (
     mutationType: string;
     args: unknown;
     snapshot?: unknown; 
+    // The Three Times:
+    hlcTimestamp: string;       // The Causal Truth
+    deviceTimestamp: Date;      // The Untrusted Device Clock
   }
 ) =>
   Effect.tryPromise({
     try: async () => {
-      // 1. Check for a recent entry to merge (Only if window > 0)
-      if (SESSION_MERGE_WINDOW_MS > 0) {
-          const recentEntry = await db
-            .selectFrom("block_history")
-            .select(["id", "timestamp"])
-            .where("note_id", "=", payload.noteId)
-            .where("block_id", "=", payload.blockId as string) 
-            .where("user_id", "=", payload.userId)
-            .where("mutation_type", "=", payload.mutationType)
-            .orderBy("timestamp", "desc")
-            .executeTakeFirst();
+      const now = new Date(); // Server Physical Time
 
-          const now = new Date();
-
-          if (recentEntry) {
-            const timeDiff = now.getTime() - new Date(recentEntry.timestamp).getTime();
-            
-            // If within window, merge it (Update existing entry)
-            if (timeDiff < SESSION_MERGE_WINDOW_MS) {
-                await db
-                  .updateTable("block_history")
-                  .set({
-                      change_delta: JSON.stringify(payload.args),
-                      content_snapshot: payload.snapshot ? JSON.stringify(payload.snapshot) : null,
-                      timestamp: now, // Bump timestamp to keep session alive
-                  })
-                  .where("id", "=", recentEntry.id)
-                  .execute();
-                
-                return recentEntry.id;
-            }
-          }
-      }
-
-      // 2. Otherwise, create new entry
-      // block_id column expects UUID, but payload.blockId is branded string.
-      const now = new Date();
       const result = await db
         .insertInto("block_history")
         .values({
@@ -74,11 +40,16 @@ export const logBlockHistory = (
           change_delta: JSON.stringify(payload.args),
           content_snapshot: payload.snapshot ? JSON.stringify(payload.snapshot) : null,
           was_rejected: false, 
-          timestamp: now,
+          
+          // Time Metadata
+          hlc_timestamp: payload.hlcTimestamp,
+          device_timestamp: payload.deviceTimestamp,
+          server_received_at: now,
         })
         .returning("id")
         .executeTakeFirstOrThrow();
-      return result.id;
+
+      return result.id as string;
     },
     catch: (cause) => new NoteDatabaseError({ cause }),
   });
@@ -92,7 +63,6 @@ export const markHistoryRejected = (
       db
         .updateTable("block_history")
         .set({ was_rejected: true })
-        // Cast string ID to branded ID to satisfy Kysely types
         .where("id", "=", historyId as BlockHistoryId)
         .execute(),
     catch: (cause) => new NoteDatabaseError({ cause }),

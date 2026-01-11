@@ -1,6 +1,5 @@
-// FILE: src/lib/shared/replicache-schemas.ts
+// File: src/lib/shared/replicache-schemas.ts
 import { Schema } from "effect";
-// Import the Tiptap schema
 import {
   NoteIdSchema,
   UserIdSchema,
@@ -28,7 +27,8 @@ export type SyncFilter = Schema.Schema.Type<typeof SyncFilterSchema>;
 // --- PULL ---
 export const PullRequestSchema = Schema.Struct({
   clientGroupID: Schema.String,
-  cookie: Schema.Union(Schema.Number, Schema.Null),
+  // ✅ CHANGED: cookie now accepts string for HLC support
+  cookie: Schema.Union(Schema.Number, Schema.String, Schema.Null),
   filter: Schema.optional(SyncFilterSchema),
 });
 export type PullRequest = Schema.Schema.Type<typeof PullRequestSchema>;
@@ -67,7 +67,6 @@ const SerializedBlockSchema = Schema.Struct({
   global_version: Schema.optional(Schema.String),
 });
 
-// ✅ NEW: Serialized Notebook
 const SerializedNotebookSchema = Schema.Struct({
   _tag: Schema.Literal("notebook"),
   id: NotebookIdSchema,
@@ -90,15 +89,10 @@ const PatchOperationSchema = Schema.Union(
   }),
   Schema.Struct({ op: Schema.Literal("del"), key: Schema.String }),
 );
+
 export const PullResponseSchema = Schema.Struct({
-  cookie: Schema.transform(
-    Schema.Union(Schema.Number, Schema.String),
-    Schema.Number,
-    {
-      decode: (input: string | number) => Number(input),
-      encode: (output: number) => output,
-    },
-  ),
+  // ✅ CHANGED: cookie is now polymorphic (Number | String) to handle HLCs
+  cookie: Schema.Union(Schema.Number, Schema.String),
   lastMutationIDChanges: Schema.Record({
     key: Schema.String,
     value: Schema.Number,

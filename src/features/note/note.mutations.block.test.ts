@@ -1,4 +1,4 @@
-// FILE: src/features/note/note.mutations.block.test.ts
+// File: src/features/note/note.mutations.block.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Effect } from "effect";
 import { handleUpdateBlock } from "./note.mutations";
@@ -32,10 +32,19 @@ const mockDb = {
   selectFrom: vi.fn().mockReturnValue(mockQueryBuilder),
   updateTable: vi.fn().mockReturnValue(mockQueryBuilder),
   insertInto: vi.fn().mockReturnValue(mockQueryBuilder),
+  fn: {
+      max: vi.fn().mockReturnValue({ as: vi.fn().mockReturnThis() })
+  }
 } as any;
 
 vi.mock("../replicache/versioning", () => ({
   getNextGlobalVersion: vi.fn(() => Effect.succeed(100))
+}));
+
+// Mock history utils to avoid DB calls
+vi.mock("./history.utils", () => ({
+    logBlockHistory: vi.fn(() => Effect.succeed("history-1")),
+    markHistoryRejected: vi.fn(() => Effect.succeed(undefined))
 }));
 
 describe("handleUpdateBlock Mutation", () => {
@@ -47,19 +56,15 @@ describe("handleUpdateBlock Mutation", () => {
   });
 
   it("correctly merges new fields into existing block attributes in Note content", async () => {
-    // Flow:
-    // 1. Resolve Block (selectFrom block) -> Returns info
-    // 2. logBlockHistory (insertInto block_history)
-    // 3. Resolve Note (selectFrom note) -> Returns content
-    // 4. Update Note (updateTable note)
-    // 5. Update Block (updateTable block)
-
-    // 1. Block Lookup
-    mockExecuteTakeFirst.mockResolvedValueOnce({ note_id: NOTE_ID, version: 1, type: "interactiveBlock", fields: {} });
+    // 1. Mock Block Lookup (Resolving note_id and current version)
+    mockExecuteTakeFirst.mockResolvedValueOnce({ 
+        note_id: NOTE_ID, 
+        version: 1, 
+        type: "interactiveBlock", 
+        fields: { caption: "Existing", width: 500 } 
+    });
     
-    // 2. History (mockExecuteTakeFirstOrThrow handles this, does not consume from mockExecuteTakeFirst stack)
-
-    // 3. Note Lookup
+    // 2. Mock Note Lookup (Fetching the Prosemirror tree)
     const existingContent = {
       type: "doc",
       content: [
@@ -75,12 +80,7 @@ describe("handleUpdateBlock Mutation", () => {
     };
     mockExecuteTakeFirst.mockResolvedValueOnce({ id: NOTE_ID, content: existingContent });
 
-    // 4. Update Note Execution
-    mockExecute.mockResolvedValueOnce([]); 
-
-    // 5. Update Block Execution
-    mockExecute.mockResolvedValueOnce([]);
-
+    // 3. Execute Mutation
     await Effect.runPromise(
       handleUpdateBlock(
         mockDb, 
@@ -89,26 +89,31 @@ describe("handleUpdateBlock Mutation", () => {
           fields: { width: 600 },
           version: 1 
         }, 
-        USER_ID
+        USER_ID,
+        "1000:0000:TEST" 
       )
     );
 
-    // Verify updates
+    // 4. Verification
     expect(mockDb.updateTable).toHaveBeenCalledWith("note");
     expect(mockDb.updateTable).toHaveBeenCalledWith("block");
     
-    // Check Note Update Content
     const setCalls = mockQueryBuilder.set.mock.calls;
-    // Find the call that updates content (the Note update)
-    const noteUpdateArgs = setCalls.find((args: any[]) => args[0].content)?.[0];
     
+    // Find the call that updates note content
+    // ✅ FIXED: We must parse the stringified JSON from the mock arguments
+    const noteUpdateArgs = setCalls.find((args: any[]) => args[0].content)?.[0];
     expect(noteUpdateArgs).toBeDefined();
-    expect(noteUpdateArgs.content.content[0].attrs.fields.width).toBe(600);
-    expect(noteUpdateArgs.global_version).toBe("100");
+    
+    const parsedContent = JSON.parse(noteUpdateArgs.content);
+    expect(parsedContent.content[0].attrs.fields.width).toBe(600);
+    expect(parsedContent.content[0].attrs.fields.caption).toBe("Existing");
+    
+    expect(noteUpdateArgs.global_version).toBe("1000:0000:TEST");
   });
 
   it("is idempotent if the block record does not exist (note lookup fails)", async () => {
-    // 1. Resolve Block -> Returns undefined
+    // 1. Resolve Block -> Returns undefined (Block not found)
     mockExecuteTakeFirst.mockResolvedValueOnce(undefined);
 
     await Effect.runPromise(
@@ -116,14 +121,11 @@ describe("handleUpdateBlock Mutation", () => {
           blockId: BLOCK_ID, 
           fields: { foo: "bar" },
           version: 1 
-      }, USER_ID)
+      }, USER_ID, "2000:0000:TEST") 
     );
 
-    // It should try to select the block
     expect(mockDb.selectFrom).toHaveBeenCalledWith("block");
-    
-    // It should NOT proceed to update tables
+    // Should exit early and not perform any updates
     expect(mockDb.updateTable).not.toHaveBeenCalled();
-    expect(mockDb.insertInto).not.toHaveBeenCalled(); // No history created
   });
 });

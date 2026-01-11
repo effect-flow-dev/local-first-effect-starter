@@ -1,7 +1,7 @@
 // FILE: src/lib/shared/schemas.ts
 import { Schema } from "effect";
 
-// ✅ CHANGE: Import User types from Tenant schema instead of Central
+// Import User types from Tenant schema instead of Central
 import type { UserId, User } from "../../types/generated/tenant/tenant_template/User";
 import type { NoteId, Note } from "../../types/generated/tenant/tenant_template/Note";
 import type { BlockId, Block } from "../../types/generated/tenant/tenant_template/Block";
@@ -10,7 +10,6 @@ import type { BlockHistoryId, BlockHistory } from "../../types/generated/tenant/
 
 export type { User, Note, Block, Notebook, BlockHistory, UserId, NoteId, BlockId, NotebookId, BlockHistoryId };
 
-// ... (Rest of the file remains unchanged)
 const uuidRegex =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const UUIDSchemaBase = Schema.String.pipe(
@@ -74,6 +73,14 @@ export const LenientDateSchema = Schema.Union(
 export const DeviceAuditSchema = Schema.Struct({
   device_created_at: LenientDateSchema,
 });
+
+/**
+ * HLC Metadata for Mutations
+ */
+export const HlcMetadataSchema = {
+  hlcTimestamp: Schema.optional(Schema.String),
+  deviceTimestamp: Schema.optional(LenientDateSchema),
+};
 
 export const ChecklistItemSchema = Schema.Struct({
   id: Schema.String,
@@ -236,7 +243,6 @@ export interface TiptapBulletListNode {
   readonly content: ReadonlyArray<TiptapListItemNode>;
 }
 
-// ✅ FIX: Use 'any' for the Encoded type parameter to avoid Invariance check failures on recursive types
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TiptapListItemNodeSchema: Schema.Schema<TiptapListItemNode, any> =
   Schema.suspend(() =>
@@ -246,7 +252,7 @@ const TiptapListItemNodeSchema: Schema.Schema<TiptapListItemNode, any> =
       content: Schema.Array(
         Schema.Union(
           TiptapParagraphNodeSchema,
-          TiptapBulletListNodeSchema, // References the other recursive schema
+          TiptapBulletListNodeSchema, 
           TiptapHeadingNodeSchema,
           InteractiveBlockSchema,
           AlertBlockSchema
@@ -255,7 +261,6 @@ const TiptapListItemNodeSchema: Schema.Schema<TiptapListItemNode, any> =
     }),
   );
 
-// ✅ FIX: Use 'any' for the Encoded type parameter here as well
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TiptapBulletListNodeSchema: Schema.Schema<TiptapBulletListNode, any> =
   Schema.suspend(() =>
@@ -337,7 +342,12 @@ export const HistoryEntrySchema = Schema.Struct({
   block_id: BlockIdSchema,
   note_id: NoteIdSchema,
   mutation_type: Schema.String,
-  timestamp: LenientDateSchema,
+  
+  // The Three Times:
+  hlc_timestamp: Schema.String,           
+  device_timestamp: LenientDateSchema,     
+  server_received_at: LenientDateSchema,   
+  
   change_delta: Schema.Unknown,
   content_snapshot: Schema.optional(Schema.Unknown),
   was_rejected: Schema.Boolean,
@@ -376,7 +386,6 @@ export const UserSchema = Schema.Struct({
   ),
   avatar_url: Schema.Union(Schema.String, Schema.Null),
   email_verified: Schema.Boolean,
-  // Removed tenant-related fields from User as they belong to Tenant/Auth context now
 });
 
 export const PublicUserSchema = UserSchema.pipe(Schema.omit("password_hash"));
@@ -399,9 +408,6 @@ export const TenantSchema = Schema.Struct({
   created_at: LenientDateSchema,
 });
 
-// TenantMembershipSchema removed or deprecated as membership is now implicit by being in the DB
-
-// ... (Rest of Block Schemas remain unchanged)
 const BlockBase = {
   id: BlockIdSchema,
   user_id: UserIdSchema,
@@ -462,18 +468,14 @@ export const BlockSchema = Schema.Union(
 );
 
 export type AppBlock = Schema.Schema.Type<typeof BlockSchema>;
-export type TiptapTextBlock = Schema.Schema.Type<typeof TiptapTextBlockSchema>;
-export type FormChecklistBlock = Schema.Schema.Type<typeof FormChecklistBlockSchema>;
-export type FormMeterBlock = Schema.Schema.Type<typeof FormMeterBlockSchema>;
-export type MapBlock = Schema.Schema.Type<typeof MapBlockSchema>;
 
 const CreateBlockBase = {
   noteId: NoteIdSchema,
   blockId: BlockIdSchema,
-  deviceCreatedAt: Schema.optional(LenientDateSchema),
   latitude: Schema.optional(LatitudeSchema),
   longitude: Schema.optional(LongitudeSchema),
   content: Schema.optional(Schema.String),
+  ...HlcMetadataSchema, 
 };
 
 const CreateChecklistBlockArgs = Schema.Struct({

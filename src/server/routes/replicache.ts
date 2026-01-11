@@ -1,4 +1,4 @@
-// FILE: src/server/routes/replicache.ts
+// File: src/server/routes/replicache.ts
 import { Elysia, t } from "elysia";
 import { Effect, Either, Schema } from "effect";
 import { TreeFormatter } from "effect/ParseResult";
@@ -65,7 +65,6 @@ export const replicacheRoutes = new Elysia({ prefix: "/api/replicache" })
   .use(effectPlugin)
   .post(
     "/pull",
-    // ✅ Destructure tenant to check for schema_name
     async ({ body, user, userDb, tenant, set, runEffect }) => {
       const pullEffect = Effect.gen(function* () {
         if (!user || !userDb) {
@@ -89,7 +88,6 @@ export const replicacheRoutes = new Elysia({ prefix: "/api/replicache" })
           `[Replicache] Pull request from ${user.id} (cookie: ${validatedBody.cookie})`,
         );
 
-        // ✅ Determine schema name if using schema strategy
         const schemaName = tenant?.tenant_strategy === 'schema' && tenant.schema_name 
             ? tenant.schema_name 
             : undefined;
@@ -106,14 +104,14 @@ export const replicacheRoutes = new Elysia({ prefix: "/api/replicache" })
     {
       body: t.Object({
         clientGroupID: t.String(),
-        cookie: t.Nullable(t.Number()),
+        // ✅ FIXED: Allow String or Number to support HLC cookies
+        cookie: t.Union([t.String(), t.Number(), t.Null()]),
         filter: t.Optional(t.Any()),
       }),
     },
   )
   .post(
     "/push",
-    // ✅ Destructure tenant to check for schema_name
     async ({ body, user, userDb, currentRole, tenant, set, runEffect }) => {
       const pushEffect = Effect.gen(function* () {
         if (!user || !userDb) {
@@ -137,12 +135,10 @@ export const replicacheRoutes = new Elysia({ prefix: "/api/replicache" })
           `[Replicache] Push request from ${user.id} with ${validatedBody.mutations.length} mutations. Role: ${currentRole}`,
         );
 
-        // ✅ Determine schema name if using schema strategy
         const schemaName = tenant?.tenant_strategy === 'schema' && tenant.schema_name 
             ? tenant.schema_name 
             : undefined;
 
-        // ✅ FIX: Pass schemaName to handlePush
         return yield* handlePush(validatedBody, user, userDb, currentRole as Role, schemaName);
       });
 

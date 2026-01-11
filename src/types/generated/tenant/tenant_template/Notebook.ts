@@ -17,7 +17,7 @@ export default interface NotebookTable {
 
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
 
-  global_version: ColumnType<string, string | undefined, string>;
+  global_version: ColumnType<string, string, string>;
 }
 
 export type Notebook = Selectable<NotebookTable>;

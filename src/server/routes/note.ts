@@ -69,7 +69,8 @@ export const noteRoutes = new Elysia({ prefix: "/api/notes" })
               .selectFrom("block_history")
               .selectAll()
               .where("note_id", "=", noteId)
-              .orderBy("timestamp", "desc")
+              // ✅ FIX: Sort by HLC Timestamp (The Causal Truth)
+              .orderBy("hlc_timestamp", "desc")
               .execute(),
           catch: (cause) => new NoteDatabaseError({ cause }),
         });
@@ -77,10 +78,10 @@ export const noteRoutes = new Elysia({ prefix: "/api/notes" })
         const cleanedHistory = history.map((entry) => ({
           ...entry,
           change_delta: typeof entry.change_delta === "string" 
-            ? JSON.parse(entry.change_delta) as unknown // ✅ FIX: Cast to unknown
+            ? JSON.parse(entry.change_delta) as unknown 
             : entry.change_delta,
           content_snapshot: typeof entry.content_snapshot === "string" && entry.content_snapshot !== null
-            ? JSON.parse(entry.content_snapshot) as unknown // ✅ FIX: Cast to unknown
+            ? JSON.parse(entry.content_snapshot) as unknown 
             : entry.content_snapshot,
         }));
 

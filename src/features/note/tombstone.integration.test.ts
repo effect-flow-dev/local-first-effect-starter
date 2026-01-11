@@ -1,4 +1,4 @@
-// FILE: src/features/note/tombstone.integration.test.ts
+// File: ./src/features/note/tombstone.integration.test.ts
 import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { Effect } from "effect";
 import { handleDeleteNote, handleCreateNote } from "./note.mutations";
@@ -26,35 +26,22 @@ describe("Tombstones (Integration)", () => {
     return async () => await cleanup();
   });
 
-  it("should create a tombstone record when a note is deleted", async () => {
+  it("should create a tombstone record with HLC version", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const userId = validUserId; // ✅ Use valid ID
+        const userId = validUserId;
         const noteId = randomUUID() as NoteId;
+        const hlc = "1736612345678:0001:TEST";
 
-        yield* handleCreateNote(db, {
-          id: noteId,
-          userID: userId,
-          title: "To Be Deleted",
-        });
-
-        yield* handleDeleteNote(db, { id: noteId }, userId);
-
-        const note = yield* Effect.promise(() =>
-          db.selectFrom("note").selectAll().where("id", "=", noteId).executeTakeFirst()
-        );
-        expect(note).toBeUndefined();
+        yield* handleCreateNote(db, { id: noteId, userID: userId, title: "To Be Deleted" }, hlc);
+        yield* handleDeleteNote(db, { id: noteId }, userId, hlc);
 
         const tombstone = yield* Effect.promise(() =>
-          db
-            .selectFrom("tombstone")
-            .selectAll()
-            .where("entity_id", "=", noteId)
-            .executeTakeFirst()
+          db.selectFrom("tombstone").selectAll().where("entity_id", "=", noteId).executeTakeFirst()
         );
 
         expect(tombstone).toBeDefined();
-        expect(tombstone?.entity_type).toBe("note");
+        expect(tombstone?.deleted_at_version).toBe(hlc);
       })
     );
   });

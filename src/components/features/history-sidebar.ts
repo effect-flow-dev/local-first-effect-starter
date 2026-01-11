@@ -26,7 +26,6 @@ export class HistorySidebar extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    // ✅ FIX: Ensure host doesn't block layout or appear as 0x0
     this.style.display = "contents";
     
     this._disposeEffect = effect(() => {
@@ -51,7 +50,10 @@ export class HistorySidebar extends LitElement {
     return this; 
   }
 
-  private _formatDate(dateVal: string | Date) {
+  /**
+   * Formats the untrusted Device Timestamp for display.
+   */
+  private _formatDeviceDate(dateVal: string | Date) {
     try {
       const date = new Date(dateVal);
       return new Intl.DateTimeFormat("default", {
@@ -108,7 +110,6 @@ export class HistorySidebar extends LitElement {
 
   private _handleRestoreBlock(e: Event, entry: HistoryEntry) {
     e.stopPropagation();
-    
     if (!entry.block_id) return;
 
     const delta = entry.change_delta as Record<string, unknown>;
@@ -148,7 +149,6 @@ export class HistorySidebar extends LitElement {
 
   private _handleRestoreNote(e: Event, entry: HistoryEntry) {
     e.stopPropagation();
-
     if (entry.mutation_type !== "updateNote") return;
 
     const args = entry.change_delta as { title: string; content: TiptapDoc; notebookId?: string };
@@ -176,12 +176,7 @@ export class HistorySidebar extends LitElement {
 
   private _togglePreview(entry: HistoryEntry) {
     if (entry.mutation_type !== "updateNote") return;
-    
-    if (this._previewEntryId === entry.id) {
-        this._previewEntryId = null;
-    } else {
-        this._previewEntryId = entry.id;
-    }
+    this._previewEntryId = (this._previewEntryId === entry.id) ? null : entry.id;
   }
 
   private _renderPreviewPanel() {
@@ -247,7 +242,12 @@ export class HistorySidebar extends LitElement {
 
   override render() {
     const isOpen = isHistoryOpen.value;
-    const entries = historyEntries.value;
+    
+    // ✅ FIX: Explicit sorting by hlc_timestamp in the UI to handle eventual consistency
+    const entries = [...historyEntries.value].sort((a, b) => 
+        b.hlc_timestamp.localeCompare(a.hlc_timestamp)
+    );
+    
     const loading = isLoadingHistory.value;
     const error = historyError.value;
 
@@ -308,10 +308,13 @@ export class HistorySidebar extends LitElement {
                             <p class="text-sm font-medium ${isSelected ? 'text-blue-900' : 'text-zinc-900'}">
                                 ${this._formatDelta(entry.mutation_type, entry.change_delta)}
                             </p>
-                            <div class="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
-                                <span>${this._formatDate(entry.timestamp as unknown as string)}</span>
-                                <span>•</span>
-                                <span class="truncate max-w-[80px]" title=${entry.user_id}>User...${String(entry.user_id).slice(-4)}</span>
+                            <div class="mt-0.5 flex flex-col gap-0.5 text-xs text-zinc-500">
+                                <span title="Physical device time recorded at source">
+                                    Device: ${this._formatDeviceDate(entry.device_timestamp as unknown as string)}
+                                </span>
+                                <span title="Hybrid Logical Clock sequence identifier">
+                                    Causal: ${entry.hlc_timestamp.split(':')[1]} (T+${entry.hlc_timestamp.split(':')[0]?.slice(-4)})
+                                </span>
                             </div>
                         </div>
                         
@@ -323,13 +326,6 @@ export class HistorySidebar extends LitElement {
                             >
                             Restore
                             </button>
-                        ` : nothing}
-                        
-                        <!-- Arrow indicator for notes -->
-                        ${isInteractive && isSelected ? html`
-                            <div class="absolute right-2 top-3 text-blue-400">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
-                            </div>
                         ` : nothing}
                     </div>
                   </div>

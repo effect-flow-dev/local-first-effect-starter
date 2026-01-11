@@ -1,4 +1,4 @@
-// FILE: src/features/block/validation.integration.test.ts
+// File: src/features/block/validation.integration.test.ts
 import { describe, it, expect, afterAll, beforeEach, vi } from "vitest";
 import { Effect } from "effect";
 import { handlePush } from "../replicache/push";
@@ -9,7 +9,8 @@ import type { PushRequest } from "../../lib/shared/replicache-schemas";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
 
-// Mock Poke to suppress WebSocket side effects
+const TEST_HLC = "1736612345000:0001:TEST";
+
 vi.mock("../../lib/server/PokeService", () => ({
   poke: vi.fn(() => Effect.void),
 }));
@@ -50,6 +51,7 @@ describe("Strict Block Schema Validation (Integration)", () => {
             title: "Validation Test",
             content: { type: "doc", content: [] },
             version: 1,
+            global_version: TEST_HLC,
             created_at: new Date(),
             updated_at: new Date(),
           })
@@ -74,30 +76,31 @@ describe("Strict Block Schema Validation (Integration)", () => {
                 noteId,
                 blockId,
                 type: "form_checklist",
-                // BAD: Missing 'items', has 'value' instead
                 fields: { value: 10 }, 
                 latitude: 0, 
-                longitude: 0
+                longitude: 0,
+                hlcTimestamp: TEST_HLC
             }
           }]
         };
 
-        // We spy on console.error to confirm the rejection log, as handlePush swallows errors to not crash queue
-        const errorSpy = vi.spyOn(console, "error");
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         
         yield* handlePush(invalidPush, { ...mockUser, id: schemaUserId }, db, "OWNER");
 
-        // Should log validation error
         expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("[Push] Schema Validation Failed for createBlock"),
-            expect.any(String)
+            expect.stringContaining("Mutation FAILED: createBlock")
+        );
+        expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining("is missing")
         );
 
-        // Verify Block was NOT created
         const block = yield* Effect.promise(() =>
             db.selectFrom("block").selectAll().where("id", "=", blockId).executeTakeFirst()
         );
         expect(block).toBeUndefined();
+        
+        errorSpy.mockRestore();
       })
     );
   });
@@ -121,24 +124,29 @@ describe("Strict Block Schema Validation (Integration)", () => {
                 blockId,
                 type: "map_block",
                 fields: { zoom: 10 },
-                latitude: 999, // BAD: > 90
-                longitude: 0
+                latitude: 999, 
+                longitude: 0,
+                hlcTimestamp: TEST_HLC
             }
           }]
         };
 
-        const errorSpy = vi.spyOn(console, "error");
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         yield* handlePush(invalidPush, { ...mockUser, id: schemaUserId }, db, "OWNER");
 
         expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("Schema Validation Failed"),
-            expect.stringContaining("Invalid Latitude")
+            expect.stringContaining("Mutation FAILED: createBlock")
+        );
+        expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining("Invalid Latitude: must be between -90 and 90")
         );
 
         const block = yield* Effect.promise(() =>
             db.selectFrom("block").selectAll().where("id", "=", blockId).executeTakeFirst()
         );
         expect(block).toBeUndefined();
+        
+        errorSpy.mockRestore();
       })
     );
   });
@@ -163,7 +171,8 @@ describe("Strict Block Schema Validation (Integration)", () => {
                 type: "form_meter",
                 fields: { label: "Speed", value: 60, min: 0, max: 120, unit: "mph" },
                 latitude: 40.7128,
-                longitude: -74.0060
+                longitude: -74.0060,
+                hlcTimestamp: TEST_HLC
             }
           }]
         };
@@ -171,7 +180,6 @@ describe("Strict Block Schema Validation (Integration)", () => {
         yield* handlePush(validPush, { ...mockUser, id: schemaUserId }, db, "OWNER");
 
         const block = yield* Effect.promise(() =>
-            // ✅ FIX: Added .selectAll() so TypeScript infers the columns (including latitude)
             db.selectFrom("block").selectAll().where("id", "=", blockId).executeTakeFirst()
         );
         expect(block).toBeDefined();

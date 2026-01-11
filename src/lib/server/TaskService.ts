@@ -1,8 +1,8 @@
-// FILE: src/lib/server/TaskService.ts
+// File: src/lib/server/TaskService.ts
 import { Data, Effect } from "effect";
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../../types";
-import type { UserId, NoteId } from "../shared/schemas"; // ✅ Fixed Import
+import type { UserId, NoteId } from "../shared/schemas"; 
 import type { NewTask } from "../../types/generated/tenant/tenant_template/Task";
 
 const TASK_REGEX = /^\s*(-\s*)?\[( |x)\]\s+(.*)/i;
@@ -11,16 +11,24 @@ export class TaskServiceError extends Data.TaggedError("TaskServiceError")<{
   readonly cause: unknown;
 }> {}
 
+/**
+ * syncTasksForNote
+ * 
+ * Extracts tasks from Markdown blocks and syncs them to the 'task' table.
+ * ✅ FIXED: Now requires globalVersion (HLC) to satisfy DB constraints.
+ */
 export const syncTasksForNote = (
   db: Kysely<Database> | Transaction<Database>, 
   noteId: NoteId, 
-  userId: UserId
+  userId: UserId,
+  globalVersion: string // ✅ NEW
 ) =>
   Effect.gen(function* () {
     yield* Effect.logInfo(
-      `[TaskService] Starting sync for noteId: ${noteId}`,
+      `[TaskService] Syncing tasks for note: ${noteId} at HLC: ${globalVersion}`,
     );
 
+    // Remove old tasks for this note's blocks
     yield* Effect.tryPromise({
       try: () =>
         db
@@ -61,6 +69,9 @@ export const syncTasksForNote = (
           source_block_id: block.id,
           content,
           is_complete,
+          // ✅ FIXED: Property 'global_version' added
+          global_version: globalVersion,
+          updated_at: new Date()
         });
       }
     }

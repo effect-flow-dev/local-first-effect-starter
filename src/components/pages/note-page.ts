@@ -20,6 +20,7 @@ import { updateTabTitle } from "../../lib/client/stores/tabStore";
 import { type NotePageError } from "../../lib/client/errors";
 import { NoteTitleExistsError } from "../../lib/shared/errors";
 import { ReplicacheService } from "../../lib/client/replicache";
+import { HlcService } from "../../lib/client/hlc/HlcService"; // ✅ FIX: Standard Import
 import { v4 as uuidv4 } from "uuid";
 import { getCurrentPosition } from "../../lib/client/geolocation";
 
@@ -48,10 +49,10 @@ import {
     handleInput,
     handleEditorUpdate,
     handleForceSave,
+    handleBlockUpdateMethod, // ✅ FIX: Import Method
 } from "./note-page.methods";
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { openHistory } from "../../lib/client/stores/historyStore";
-import { clientLog } from "../../lib/client/clientLog";
 import type { ChecklistItem } from "../blocks/smart-checklist";
 
 // Typed Field Interfaces
@@ -67,7 +68,8 @@ interface MeterFields {
 interface MapFields { zoom?: number; style?: string; }
 interface TiptapTextFields { content: TiptapDoc; }
 
-interface UpdateTaskStatusEventDetail { blockId: BlockId; isComplete: boolean; }
+// FIX: Aligned Interface
+interface UpdateTaskStatusEventDetail { blockId: BlockId; isComplete: boolean; version: number; }
 interface EditorUpdateEventDetail { content: TiptapDoc; }
 interface LinkHoverEventDetail { target: string; x: number; y: number; }
 
@@ -139,16 +141,7 @@ export class NotePage extends LitElement {
             }
         }
 
-        runClientUnscoped(Effect.gen(function* () {
-            const replicache = yield* ReplicacheService;
-            yield* Effect.promise(() =>
-                replicache.client.mutate.updateBlock({
-                    blockId,
-                    fields,
-                    version: currentVersion
-                })
-            );
-        }));
+        handleBlockUpdateMethod(this, blockId, fields, currentVersion);
     };
 
     private _handleIncrementBlock = (e: Event) => {
@@ -166,16 +159,22 @@ export class NotePage extends LitElement {
             }
         }
 
+        // ✅ FIX: Corrected HLC injection logic
         runClientUnscoped(Effect.gen(function* () {
             const replicache = yield* ReplicacheService;
-            yield* Effect.promise(() =>
-                replicache.client.mutate.incrementCounter({
-                    blockId,
-                    key,
-                    delta,
-                    version: currentVersion
-                })
-            );
+            const hlc = yield* HlcService;
+            
+            const hlcTimestamp = yield* hlc.getNextHlc();
+            const deviceTimestamp = new Date();
+
+            yield* Effect.promise(() => replicache.client.mutate.incrementCounter({
+                blockId,
+                key,
+                delta,
+                version: currentVersion,
+                hlcTimestamp,
+                deviceTimestamp
+            }));
         }));
     };
 
@@ -183,11 +182,14 @@ export class NotePage extends LitElement {
         const noteId = this.id as NoteId;
         const blockId = uuidv4() as BlockId;
 
+        // ✅ FIX: Context-aware effect block
         runClientUnscoped(Effect.gen(function* () {
             const location = yield* getCurrentPosition();
             const replicache = yield* ReplicacheService;
-            
-            yield* clientLog("info", `[NotePage] Adding block ${type} at`, location);
+            const hlc = yield* HlcService;
+
+            const hlcTimestamp = yield* hlc.getNextHlc();
+            const deviceTimestamp = new Date();
 
             const latitude = location?.latitude;
             const longitude = location?.longitude;
@@ -202,6 +204,8 @@ export class NotePage extends LitElement {
                             fields: { items: [{ id: uuidv4(), label: "New Item", checked: false }] },
                             latitude,
                             longitude,
+                            hlcTimestamp,
+                            deviceTimestamp
                         })
                     );
                     break;
@@ -214,6 +218,8 @@ export class NotePage extends LitElement {
                             fields: { label: "New Meter", value: 0, min: 0, max: 100, unit: "%" },
                             latitude,
                             longitude,
+                            hlcTimestamp,
+                            deviceTimestamp
                         })
                     );
                     break;
@@ -226,6 +232,8 @@ export class NotePage extends LitElement {
                             fields: { zoom: 13 },
                             latitude,
                             longitude,
+                            hlcTimestamp,
+                            deviceTimestamp
                         })
                     );
                     break;
@@ -239,6 +247,8 @@ export class NotePage extends LitElement {
                             fields: {},
                             latitude,
                             longitude,
+                            hlcTimestamp,
+                            deviceTimestamp
                         })
                     );
                     break;
@@ -350,9 +360,7 @@ export class NotePage extends LitElement {
 
     private _renderBlock(block: AppBlock) {
         if (block.type === 'alert') {
-            const fields = block.fields as { level?: string } | undefined;
-            const _level = fields?.level || 'warning';
-            
+            // const fields = block.fields as { level?: string } | undefined;
             return html`
                 <div class="alert-block p-4 my-4 rounded-md bg-red-50 border-l-4 border-red-500 text-red-800 flex items-center justify-between" data-block-id="${block.id}">
                     <div class="flex items-center gap-3">
@@ -523,8 +531,6 @@ export class NotePage extends LitElement {
                            </div>
                         </div>
                         <div class="flex items-center gap-4">
-                          <!-- ✅ REMOVED: Redundant status indicator (saved/saving) to fix duplicate text error in tests -->
-                          <!-- Only showing error message if present -->
                           ${saveError ? html`<span class="text-red-500">${getErrorMessage(saveError)}</span>` : nothing}
 
                           <button
@@ -570,7 +576,6 @@ export class NotePage extends LitElement {
                         ${repeat(blocks, (block) => block.id, (block) => this._renderBlock(block))}
                       </div>
 
-                      <!-- ADD BLOCK FLOATING MENU -->
                       <div class="fixed bottom-6 right-6 z-50">
                         <dropdown-menu>
                             <button

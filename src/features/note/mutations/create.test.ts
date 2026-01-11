@@ -56,7 +56,7 @@ describe("handleCreateNote (Fix Verification)", () => {
                         fields: { is_complete: false },
                     },
                 ],
-            }),
+            }, "1000:0000:TEST"), // ✅ FIX: Added HLC
         );
 
         expect(mockDb.insertInto).toHaveBeenCalledWith("note");

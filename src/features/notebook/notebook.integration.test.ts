@@ -1,4 +1,4 @@
-// FILE: src/features/notebook/notebook.integration.test.ts
+// File: ./src/features/notebook/notebook.integration.test.ts
 import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { Effect } from "effect";
 import { handleCreateNotebook, handleDeleteNotebook } from "./notebook.mutations";
@@ -36,11 +36,13 @@ describe("Notebooks (Integration)", () => {
       Effect.gen(function* () {
         const userId = yield* setupUser;
         const notebookId = randomUUID() as NotebookId;
+        const hlc = "1736612345678:0001:TEST";
 
         yield* handleCreateNotebook(
           db,
           { id: notebookId, name: "Work Projects" },
-          userId
+          userId,
+          hlc
         );
 
         const row = yield* Effect.promise(() =>
@@ -54,7 +56,7 @@ describe("Notebooks (Integration)", () => {
         expect(row).toBeDefined();
         expect(row?.name).toBe("Work Projects");
         expect(row?.user_id).toBe(userId);
-        expect(Number(row?.global_version)).toBeGreaterThan(0);
+        expect(row?.global_version).toBe(hlc);
       })
     );
   });
@@ -65,15 +67,16 @@ describe("Notebooks (Integration)", () => {
         const userId = yield* setupUser;
         const notebookId = randomUUID() as NotebookId;
         const noteId = randomUUID() as NoteId;
+        const hlc = "1736612345678:0002:TEST";
 
-        yield* handleCreateNotebook(db, { id: notebookId, name: "Personal" }, userId);
+        yield* handleCreateNotebook(db, { id: notebookId, name: "Personal" }, userId, hlc);
 
         yield* handleCreateNote(db, {
           id: noteId,
           userID: userId,
           title: "My Diary",
           notebookId: notebookId,
-        });
+        }, hlc);
 
         const note = yield* Effect.promise(() =>
           db.selectFrom("note").select(["id", "notebook_id"]).where("id", "=", noteId).executeTakeFirstOrThrow()
@@ -90,16 +93,17 @@ describe("Notebooks (Integration)", () => {
         const userId = yield* setupUser;
         const notebookId = randomUUID() as NotebookId;
         const noteId = randomUUID() as NoteId;
+        const hlc = "1736612345678:0003:TEST";
 
-        yield* handleCreateNotebook(db, { id: notebookId, name: "To Delete" }, userId);
+        yield* handleCreateNotebook(db, { id: notebookId, name: "To Delete" }, userId, hlc);
         yield* handleCreateNote(db, {
           id: noteId,
           userID: userId,
           title: "Linked Note",
           notebookId: notebookId,
-        });
+        }, hlc);
 
-        yield* handleDeleteNotebook(db, { id: notebookId }, userId);
+        yield* handleDeleteNotebook(db, { id: notebookId }, userId, hlc);
 
         const nbRow = yield* Effect.promise(() =>
           db.selectFrom("notebook").select("id").where("id", "=", notebookId).executeTakeFirst()
@@ -110,6 +114,7 @@ describe("Notebooks (Integration)", () => {
           db.selectFrom("note").selectAll().where("id", "=", noteId).executeTakeFirstOrThrow()
         );
         expect(updatedNote.notebook_id).toBeNull();
+        expect(updatedNote.global_version).toBe(hlc);
       })
     );
   });

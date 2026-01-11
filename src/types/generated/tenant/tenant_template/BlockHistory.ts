@@ -18,7 +18,7 @@ export default interface BlockHistoryTable {
 
   user_id: ColumnType<UserId, UserId, UserId>;
 
-  timestamp: ColumnType<Date, Date | string | undefined, Date | string>;
+  device_timestamp: ColumnType<Date, Date | string | undefined, Date | string>;
 
   mutation_type: ColumnType<string, string, string>;
 
@@ -27,6 +27,10 @@ export default interface BlockHistoryTable {
   change_delta: ColumnType<unknown, unknown, unknown>;
 
   was_rejected: ColumnType<boolean, boolean | undefined, boolean>;
+
+  hlc_timestamp: ColumnType<string, string, string>;
+
+  server_received_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 export type BlockHistory = Selectable<BlockHistoryTable>;

@@ -6,21 +6,23 @@ import {
   Scope,
   ExecutionStrategy,
   Exit,
-  Cause
+  Cause,
+  Context // ✅ FIX: Added Context import
 } from "effect";
 import { clientLog } from "./clientLog";
 import { LocationLive, LocationService } from "./LocationService";
 import { ReplicacheLive, ReplicacheService } from "./replicache";
 import { MediaSyncLive, MediaSyncService } from "./media/MediaSyncService";
+import { HlcLive, HlcService } from "./hlc/HlcService"; 
 import { startMapPrefetch } from "./MapCacheService"; 
-import { startMediaPrefetch } from "./MediaCacheService"; // ✅ NEW: Import Media Prefetch
+import { startMediaPrefetch } from "./MediaCacheService"; 
 import type { PublicUser } from "../shared/schemas";
 import { addToast } from "./stores/toastStore";
 
 // Base context only needs LocationService
 export type BaseClientContext = LocationService;
-// Full context includes Replicache AND MediaSync
-export type FullClientContext = BaseClientContext | ReplicacheService | MediaSyncService;
+// Full context includes Replicache, MediaSync, and HlcService
+export type FullClientContext = BaseClientContext | ReplicacheService | MediaSyncService | HlcService;
 
 export const BaseClientLive = LocationLive;
 
@@ -37,6 +39,17 @@ export let clientRuntime: Runtime.Runtime<FullClientContext> =
 
 let replicacheScope: Scope.CloseableScope | null = null;
 
+/**
+ * Helper for synchronous access to HlcService in Replicache Mutators
+ */
+export const getHlcServiceSync = () => {
+    try {
+        return Context.get(clientRuntime.context, HlcService);
+    } catch {
+        return null;
+    }
+};
+
 export const activateReplicacheRuntime = (user: PublicUser) =>
   Effect.gen(function* () {
     yield* clientLog("info", "--> [runtime] Activating Replicache runtime...");
@@ -51,14 +64,11 @@ export const activateReplicacheRuntime = (user: PublicUser) =>
     const newScope = yield* Scope.fork(appScope, ExecutionStrategy.sequential);
     replicacheScope = newScope;
 
+    const hlcLayer = HlcLive(user.id);
     const replicacheLayer = ReplicacheLive(user);
-    // MediaSync depends on Replicache, so we provide it here
     const mediaSyncLayer = MediaSyncLive.pipe(Layer.provide(replicacheLayer));
     
-    // Merge authenticated layers
-    const authenticatedLayer = Layer.merge(replicacheLayer, mediaSyncLayer);
-    
-    // Merge with base infrastructure
+    const authenticatedLayer = Layer.mergeAll(replicacheLayer, mediaSyncLayer, hlcLayer);
     const fullLayer = Layer.merge(BaseClientLive, authenticatedLayer);
 
     const newRuntime = yield* Scope.extend(
@@ -67,14 +77,13 @@ export const activateReplicacheRuntime = (user: PublicUser) =>
     );
     clientRuntime = newRuntime;
 
-    // ✅ Start Background Services
-    // These depend on Replicache being active.
+    // Start Background Services
     startMapPrefetch();
-    startMediaPrefetch(); // ✅ NEW: Start Media Prefetcher here
+    startMediaPrefetch();
 
     yield* clientLog(
       "info",
-      "<-- [runtime] Replicache, MediaSync, MapCache & MediaCache runtimes activated successfully.",
+      "<-- [runtime] Replicache, MediaSync, HLC, MapCache & MediaCache runtimes activated successfully.",
     );
   });
 
@@ -88,7 +97,6 @@ export const deactivateReplicacheRuntime = () =>
       const scopeToClose = replicacheScope;
       replicacheScope = null;
       
-      // Revert to the base runtime
       clientRuntime = AppRuntime as Runtime.Runtime<FullClientContext>;
       
       yield* clientLog(
@@ -104,27 +112,15 @@ export const deactivateReplicacheRuntime = () =>
     }
   });
 
-/**
- * Wraps an Effect with global error reporting (Toast System).
- * If a fatal/unhandled error occurs in the chain, it pops a red toast.
- */
 const withGlobalErrorReporting = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
   return effect.pipe(
     Effect.tapErrorCause((cause) => 
       Effect.sync(() => {
-        // Only toast if it's not a controlled interruption (e.g. navigation cancellation)
         if (!Cause.isInterruptedOnly(cause)) {
           const failure = Cause.squash(cause);
           const message = failure instanceof Error ? failure.message : String(failure);
-          
           console.error("[Runtime] Unhandled Effect Failure:", failure);
-          
-          // Trigger Global Toast
-          addToast(
-            `Unexpected Error: ${message.slice(0, 100)}`, 
-            "error", 
-            6000
-          );
+          addToast(`Unexpected Error: ${message.slice(0, 100)}`, "error", 6000);
         }
       })
     )
@@ -134,17 +130,13 @@ const withGlobalErrorReporting = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
 export const runClientPromise = <A, E>(
   effect: Effect.Effect<A, E, FullClientContext>,
 ) => {
-  return Runtime.runPromise(clientRuntime)(
-    withGlobalErrorReporting(effect)
-  );
+  return Runtime.runPromise(clientRuntime)(withGlobalErrorReporting(effect));
 };
 
 export const runClientUnscoped = <A, E>(
   effect: Effect.Effect<A, E, FullClientContext>,
 ) => {
-  return Runtime.runFork(clientRuntime)(
-    withGlobalErrorReporting(effect)
-  );
+  return Runtime.runFork(clientRuntime)(withGlobalErrorReporting(effect));
 };
 
 export const shutdownClient = () =>

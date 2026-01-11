@@ -33,7 +33,8 @@ describe("History & Rollback (Integration)", () => {
   const ageHistory = async (seconds: number) => {
       await db.updateTable("block_history")
         .set({
-            timestamp: sql`timestamp - (${seconds} * interval '1 second')`
+            // ✅ FIX: device_timestamp instead of timestamp
+            device_timestamp: sql`device_timestamp - (${seconds} * interval '1 second')`
         })
         .execute();
   };
@@ -41,7 +42,7 @@ describe("History & Rollback (Integration)", () => {
   it("should maintain a linear history and allow reverting a block to a previous state", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const userId = validUserId; // ✅ Use valid ID
+        const userId = validUserId; 
         const noteId = randomUUID() as NoteId;
         const blockId = randomUUID() as BlockId;
 
@@ -51,7 +52,7 @@ describe("History & Rollback (Integration)", () => {
           userID: userId,
           title: "Audit Note",
           initialBlockId: blockId
-        });
+        }, "1000:0000:TEST"); // ✅ FIX: Added HLC
 
         yield* Effect.promise(() => 
             db.updateTable("block")
@@ -67,7 +68,7 @@ describe("History & Rollback (Integration)", () => {
             blockId,
             isComplete: true,
             version: 1
-        }, userId);
+        }, userId, "2000:0000:TEST"); // ✅ FIX: Added HLC
 
         let block = yield* Effect.promise(() => 
             db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
@@ -82,7 +83,7 @@ describe("History & Rollback (Integration)", () => {
             blockId,
             isComplete: false,
             version: 2
-        }, userId);
+        }, userId, "3000:0000:TEST"); // ✅ FIX: Added HLC
 
         block = yield* Effect.promise(() => 
             db.selectFrom("block").select("fields").where("id", "=", blockId).executeTakeFirstOrThrow()
@@ -95,7 +96,8 @@ describe("History & Rollback (Integration)", () => {
             db.selectFrom("block_history")
               .selectAll()
               .where("note_id", "=", noteId)
-              .orderBy("timestamp", "desc")
+              // ✅ FIX: hlc_timestamp instead of timestamp
+              .orderBy("hlc_timestamp", "desc")
               .execute()
         );
 
@@ -122,7 +124,7 @@ describe("History & Rollback (Integration)", () => {
             blockId,
             historyId: targetEntry.id,
             targetSnapshot
-        }, userId);
+        }, userId, "4000:0000:TEST"); // ✅ FIX: Added HLC
 
         const finalBlock = yield* Effect.promise(() => 
             db.selectFrom("block").select(["fields", "version"]).where("id", "=", blockId).executeTakeFirstOrThrow()

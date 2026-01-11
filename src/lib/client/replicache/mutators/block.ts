@@ -6,7 +6,7 @@ import {
     type NoteId, 
     type UserId, 
     CreateBlockArgsSchema 
-} from "../../../shared/schemas"; // ✅ Correct Import path
+} from "../../../shared/schemas"; 
 import type { TraversalNode, NoteStructure, BlockStructure } from "./types";
 
 export interface SerializedBlock {
@@ -33,7 +33,6 @@ export interface SerializedBlock {
     _tag: "block";
 }
 
-// Minimal interface for order calculation
 interface BlockOrderPartial {
     note_id: string;
     order?: number;
@@ -43,17 +42,14 @@ export const createBlock = async (
     tx: WriteTransaction,
     args: Schema.Schema.Type<typeof CreateBlockArgsSchema>
 ) => {
-    // 1. Strict Validation (Optimistic Guard)
     const validatedArgs = Schema.decodeUnknownSync(CreateBlockArgsSchema)(args);
 
-    // 2. Calculate Order
     const blocks = await tx.scan({ prefix: "block/" }).values().toArray();
     const noteBlocks = (blocks as unknown as BlockOrderPartial[]).filter(b => b.note_id === validatedArgs.noteId);
 
     const maxOrder = noteBlocks.reduce((max: number, b) => Math.max(max, b.order || 0), 0);
     const nextOrder = maxOrder + 1;
 
-    // 3. Create Block
     const now = new Date().toISOString();
 
     const note = await tx.get(`note/${validatedArgs.noteId}`) as NoteStructure | undefined;
@@ -61,10 +57,6 @@ export const createBlock = async (
         ? note['user_id']
         : "unknown-user";
 
-    // Extract fields safely
-    // Since validatedArgs is a Union, we access fields generically.
-    // 'fields' exists on all members of CreateBlockArgsSchema, though its type varies.
-    // We can cast to any/Record for the storage format which is generic.
     const fields = (validatedArgs as { fields?: Record<string, unknown> }).fields || {};
 
     const newBlock: SerializedBlock = {
@@ -87,10 +79,9 @@ export const createBlock = async (
         parent_id: null,
         latitude: validatedArgs.latitude,
         longitude: validatedArgs.longitude,
-        // Convert Date object to ISO string for storage if present
-        device_created_at: validatedArgs.deviceCreatedAt instanceof Date 
-            ? validatedArgs.deviceCreatedAt.toISOString() 
-            : validatedArgs.deviceCreatedAt,
+        device_created_at: validatedArgs.deviceTimestamp instanceof Date 
+            ? validatedArgs.deviceTimestamp.toISOString() 
+            : undefined,
     };
 
     await tx.set(`block/${validatedArgs.blockId}`, newBlock as unknown as ReadonlyJSONValue);
@@ -98,7 +89,7 @@ export const createBlock = async (
 
 export const updateTask = async (
     tx: WriteTransaction,
-    args: { blockId: BlockId; isComplete: boolean; version: number },
+    args: { blockId: BlockId; isComplete: boolean; version: number; hlcTimestamp?: string; deviceTimestamp?: Date },
 ) => {
     if (!args.blockId) return;
     const notes = await tx.scan({ prefix: "note/" }).values().toArray();
@@ -168,6 +159,8 @@ export const updateBlock = async (
         blockId: BlockId;
         fields: Record<string, unknown>;
         version: number;
+        hlcTimestamp?: string;
+        deviceTimestamp?: Date;
     },
 ): Promise<boolean> => {
     if (!args.blockId) return false;
@@ -238,6 +231,8 @@ export const revertBlock = async (
         blockId: BlockId;
         historyId: string;
         targetSnapshot: Record<string, unknown>;
+        hlcTimestamp?: string;
+        deviceTimestamp?: Date;
     },
 ) => {
     const notes = await tx.scan({ prefix: "note/" }).values().toArray();
@@ -316,20 +311,19 @@ export const incrementCounter = async (
         key: string;
         delta: number;
         version: number;
+        hlcTimestamp?: string;
+        deviceTimestamp?: Date;
     }
 ) => {
-    // 1. Update the Block Record (Fast, Indexed)
     const blockKey = `block/${args.blockId}`;
     const blockVal = await tx.get(blockKey);
 
     if (!blockVal) {
-        console.warn(`[Mutator] incrementCounter: Block ${args.blockId} not found`);
         return;
     }
 
     const block = blockVal as unknown as SerializedBlock;
     const currentFields = block.fields || {};
-    // Default to 0 if the field is missing or not a number
     const oldVal = (typeof currentFields[args.key] === 'number')
         ? (currentFields[args.key] as number)
         : 0;
@@ -345,7 +339,6 @@ export const incrementCounter = async (
 
     await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
 
-    // 2. Update the Embedding Note (Hybrid Compatibility)
     if (block.note_id) {
         const noteKey = `note/${block.note_id}`;
         const noteVal = await tx.get(noteKey);
@@ -353,7 +346,6 @@ export const incrementCounter = async (
         if (noteVal) {
             const note = noteVal as unknown as NoteStructure;
             if (note.content && Array.isArray(note.content.content)) {
-                // Helper to traverse and update
                 const updateNode = (nodes: TraversalNode[]): boolean => {
                     let changed = false;
                     for (const node of nodes) {

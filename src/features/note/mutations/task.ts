@@ -1,15 +1,13 @@
-// FILE: src/features/note/mutations/task.ts
+// File: src/features/note/mutations/task.ts
 import { Effect } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
 import { NoteDatabaseError, VersionConflictError } from "../Errors";
-import { getNextGlobalVersion } from "../../replicache/versioning";
 import { logBlockHistory, markHistoryRejected } from "../history.utils";
 import { updateTaskInContent } from "../utils/content-traversal";
 import type { UpdateTaskArgsSchema } from "../note.schemas";
-import type { UserId } from "../../../lib/shared/schemas";
+import type { UserId, BlockId } from "../../../lib/shared/schemas";
 
-// Re-defining interface to avoid circular deps with large schema file if simple
 interface ContentNode {
   type: string;
   attrs?: {
@@ -21,40 +19,75 @@ interface ContentNode {
   content?: ContentNode[];
 }
 
+/**
+ * Shared helper to sync the denormalized task table.
+ * This ensures fields like due_at and is_complete stay in sync regardless 
+ * of which mutation triggered the change.
+ */
+export const _syncTaskTable = (
+    db: Kysely<Database> | Transaction<Database>,
+    blockId: BlockId,
+    updates: { is_complete?: boolean; due_at?: string | null },
+    globalVersion: string
+) => Effect.gen(function* () {
+    const updatePayload: Record<string, unknown> = {
+        global_version: globalVersion,
+        updated_at: sql`now()`
+    };
+
+    if (updates.is_complete !== undefined) {
+        updatePayload.is_complete = updates.is_complete;
+    }
+
+    if (updates.due_at !== undefined) {
+        updatePayload.due_at = updates.due_at;
+        // If the due date changed, we reset alert_sent_at 
+        // so the AlertWorker can notify the user of the new time.
+        updatePayload.alert_sent_at = null;
+    }
+
+    yield* Effect.tryPromise({
+        try: () => db.updateTable("task")
+            .set(updatePayload)
+            .where("source_block_id", "=", blockId)
+            .execute(),
+        catch: (cause) => new NoteDatabaseError({ cause })
+    });
+});
+
 export const handleUpdateTask = (
   db: Kysely<Database> | Transaction<Database>,
   args: typeof UpdateTaskArgsSchema.Type,
-  userId: UserId, 
+  userId: UserId,
+  globalVersion: string 
 ) =>
   Effect.gen(function* () {
-    yield* Effect.logInfo(`[handleUpdateTask] Updating task ${args.blockId}`);
-    const globalVersion = yield* getNextGlobalVersion(db);
+    const deviceTime = args.deviceTimestamp || new Date();
+    
+    yield* Effect.logInfo(`[handleUpdateTask] Task: ${args.blockId}, HLC: ${globalVersion}`);
 
     const blockRow = yield* Effect.tryPromise({
       try: () => db.selectFrom("block").select(["note_id", "version"]).where("id", "=", args.blockId).executeTakeFirst(),
       catch: (cause) => new NoteDatabaseError({ cause }),
     });
 
-    if (!blockRow) {
-      yield* Effect.logWarning(`[handleUpdateTask] Task/Block ${args.blockId} not found.`);
-      return;
-    }
+    if (!blockRow) return;
 
-    let historyId: string | null = null;
-    if (blockRow?.note_id) {
-        historyId = yield* logBlockHistory(db, {
-            blockId: args.blockId,
-            noteId: blockRow.note_id,
-            userId: userId,
-            mutationType: "updateTask",
-            args: args
-        });
-    }
+    // Log History First
+    const historyId = yield* logBlockHistory(db, {
+        blockId: args.blockId,
+        noteId: blockRow.note_id!,
+        userId: userId,
+        mutationType: "updateTask",
+        args: args,
+        hlcTimestamp: globalVersion,
+        deviceTimestamp: deviceTime
+    });
 
+    // Version Check
     const currentVersion = blockRow?.version ?? 1;
     if (args.version !== currentVersion) {
-        yield* Effect.logWarning(`[handleUpdateTask] Version Conflict!`);
-        if (historyId) yield* markHistoryRejected(db, historyId);
+        yield* markHistoryRejected(db, historyId);
         return yield* Effect.fail(new VersionConflictError({
             blockId: args.blockId,
             expectedVersion: currentVersion,
@@ -62,6 +95,7 @@ export const handleUpdateTask = (
         }));
     }
 
+    // 1. Update Note Content JSON
     if (blockRow?.note_id) {
       const noteRow = yield* Effect.tryPromise({
         try: () => db.selectFrom("note").select(["id", "content"]).where("id", "=", blockRow.note_id!).executeTakeFirst(),
@@ -69,14 +103,14 @@ export const handleUpdateTask = (
       });
 
       if (noteRow && noteRow.content) {
-        const content = JSON.parse(JSON.stringify(noteRow.content)) as ContentNode;
+        const content = JSON.parse(typeof noteRow.content === "string" ? noteRow.content : JSON.stringify(noteRow.content)) as ContentNode;
         if (updateTaskInContent(content, args.blockId, args.isComplete)) {
           yield* Effect.tryPromise({
             try: () => db.updateTable("note").set({
                   content: content as unknown, 
                   version: sql<number>`version + 1`,
                   updated_at: sql<Date>`now()`,
-                  global_version: String(globalVersion), 
+                  global_version: globalVersion, 
                 }).where("id", "=", noteRow.id).execute(),
             catch: (cause) => new NoteDatabaseError({ cause }),
           });
@@ -84,21 +118,16 @@ export const handleUpdateTask = (
       }
     }
 
-    yield* Effect.tryPromise({
-      try: () => db.updateTable("task").set({ 
-            is_complete: args.isComplete, 
-            updated_at: sql<Date>`now()`,
-            global_version: String(globalVersion),
-          }).where("source_block_id", "=", args.blockId).execute(),
-      catch: (cause) => new NoteDatabaseError({ cause }),
-    });
+    // 2. Update denormalized Task table
+    yield* _syncTaskTable(db, args.blockId, { is_complete: args.isComplete }, globalVersion);
 
+    // 3. Update individual Block record
     yield* Effect.tryPromise({
       try: () => db.updateTable("block").set({
-            fields: sql`fields || ${JSON.stringify({ is_complete: args.isComplete })}::jsonb`,
+            fields: sql`fields || ${JSON.stringify({ is_complete: args.isComplete, status: args.isComplete ? "done" : "todo" })}::jsonb`,
             version: sql<number>`version + 1`, 
             updated_at: sql<Date>`now()`,
-            global_version: String(globalVersion),
+            global_version: globalVersion,
           }).where("id", "=", args.blockId).execute(),
       catch: (cause) => new NoteDatabaseError({ cause }),
     });

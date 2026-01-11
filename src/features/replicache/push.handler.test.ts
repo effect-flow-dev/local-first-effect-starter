@@ -1,11 +1,10 @@
-// FILE: src/features/replicache/push.handler.test.ts
-import { vi, describe, it, expect, afterEach } from "vitest";
+// File: src/features/replicache/push.handler.test.ts
+import { vi, describe, it, expect, afterEach, beforeEach } from "vitest";
 import { Effect, Either } from "effect";
 import { handlePush } from "./push";
 import type { User, UserId } from "../../lib/shared/schemas";
 import type { PushRequest } from "../../lib/shared/replicache-schemas";
 
-// --- MOCKS ---
 const {
   handleCreateNote,
   handleUpdateNote,
@@ -39,13 +38,21 @@ vi.mock("../../lib/server/PokeService", () => ({
 
 vi.mock("kysely", async (importOriginal) => {
   const actual = await importOriginal<typeof import("kysely")>();
+  
+  // ✅ FIXED:sql mock returns an object that supports chaining .as() and returning rows
+  const sqlMock: any = () => ({
+    execute: () => Promise.resolve({ rows: [] }),
+    as: () => sqlMock, 
+  });
+
   return {
     ...actual,
-    sql: Object.assign((strings: any, ...values: any[]) => ({
-      execute: () => Promise.resolve(),
-    }), {
+    sql: Object.assign(sqlMock, {
         ref: actual.sql.ref,
-        raw: () => ({ execute: () => Promise.resolve() }),
+        raw: () => ({ 
+          execute: () => Promise.resolve({ rows: [] }),
+          as: () => sqlMock 
+        }),
         join: actual.sql.join
     })
   };
@@ -58,6 +65,7 @@ const { mockDb, mockExecuteTakeFirst } = vi.hoisted(() => {
 
   const mockQueryBuilder = {
     selectAll: vi.fn().mockReturnThis(),
+    select: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     forUpdate: vi.fn().mockReturnThis(),
     set: vi.fn().mockReturnThis(),
@@ -94,7 +102,6 @@ const mockUser: User = {
   created_at: new Date(),
   avatar_url: null,
   permissions: [],
-  // ✅ FIX: Removed tenant_strategy, database_name, subdomain (now in Tenant table)
 };
 
 const mockBasePushRequest: PushRequest = {
@@ -102,11 +109,15 @@ const mockBasePushRequest: PushRequest = {
   mutations: [],
 };
 
-// Use valid UUIDs for testing schema validation
 const VALID_NOTE_UUID = "00000000-0000-0000-0000-000000000001";
 const VALID_USER_UUID = "00000000-0000-0000-0000-000000000002";
 
 describe("Replicache: handlePush", () => {
+  beforeEach(() => {
+    // Default maxHlc response
+    mockExecuteTakeFirst.mockResolvedValue({ maxHlc: "1736612345000:0001:SYSTEM" });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -114,12 +125,9 @@ describe("Replicache: handlePush", () => {
   it("given a valid createNote mutation, it correctly inserts the note", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // Mock Client State Retrieval (Initial: 0)
-        mockExecuteTakeFirst.mockResolvedValueOnce({
-          id: "client1",
-          client_group_id: "cg1",
-          last_mutation_id: 0,
-        });
+        // maxHlc -> clientGroup existence -> client state retrieval
+        mockExecuteTakeFirst.mockResolvedValueOnce({ maxHlc: "1736612345000:0001:SYSTEM" });
+        mockExecuteTakeFirst.mockResolvedValueOnce({ id: "client1", last_mutation_id: 0 });
 
         const req: PushRequest = {
           ...mockBasePushRequest,
@@ -133,7 +141,6 @@ describe("Replicache: handlePush", () => {
           ],
         };
 
-        // ✅ FIX: Added "OWNER" as the currentRole argument
         const result = yield* Effect.either(handlePush(req, mockUser, mockDb, "OWNER"));
 
         expect(Either.isRight(result)).toBe(true);
@@ -145,19 +152,14 @@ describe("Replicache: handlePush", () => {
   it("given a mutation that has already been processed, it ignores it", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // Client already at mutation 1
-        mockExecuteTakeFirst.mockResolvedValueOnce({ 
-            id: "client1",
-            client_group_id: "cg1",
-            last_mutation_id: 1 
-        });
+        mockExecuteTakeFirst.mockResolvedValueOnce({ maxHlc: "1736612345000:0001:SYSTEM" });
+        mockExecuteTakeFirst.mockResolvedValueOnce({ id: "client1", last_mutation_id: 1 });
 
         const req: PushRequest = {
           ...mockBasePushRequest,
           mutations: [{ id: 1, name: "createNote", args: { id: VALID_NOTE_UUID, userID: VALID_USER_UUID, title: "Dupe" }, clientID: "client1" }],
         };
 
-        // ✅ FIX: Added "OWNER" as the currentRole argument
         const result = yield* Effect.either(handlePush(req, mockUser, mockDb, "OWNER"));
 
         expect(Either.isRight(result)).toBe(true);

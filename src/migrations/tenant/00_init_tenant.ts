@@ -1,12 +1,11 @@
-// FILE: src/migrations/tenant/00_init_tenant.ts
+// File: src/migrations/tenant/00_init_tenant.ts
 import { Kysely, sql } from "kysely";
 import type { Database } from "../../types";
 
 export async function up(db: Kysely<Database>) {
-  // --- 1. Global Sequence (Hybrid Logical Clock) ---
-  await sql`CREATE SEQUENCE IF NOT EXISTS global_version_seq`.execute(db);
+  // --- 1. Global Sequence REMOVED (Replaced by HLC Strings) ---
 
-  // --- 2. Identity & Auth (Moved from Central) ---
+  // --- 2. Identity & Auth ---
   
   // USER
   await db.schema
@@ -50,7 +49,7 @@ export async function up(db: Kysely<Database>) {
     .addColumn("expires_at", "timestamp", (c) => c.notNull())
     .execute();
 
-  // --- 3. Core Entities (Updated with FKs to local User) ---
+  // --- 3. Core Entities ---
 
   // NOTEBOOK
   await db.schema
@@ -64,9 +63,8 @@ export async function up(db: Kysely<Database>) {
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
-    .addColumn("global_version", "bigint", (c) =>
-      c.notNull().defaultTo(sql`nextval('global_version_seq')`),
-    )
+    // ✅ CHANGED: global_version is now text
+    .addColumn("global_version", "text", (c) => c.notNull())
     .execute();
 
   await db.schema
@@ -92,9 +90,8 @@ export async function up(db: Kysely<Database>) {
     .addColumn("updated_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
-    .addColumn("global_version", "bigint", (c) =>
-      c.notNull().defaultTo(sql`nextval('global_version_seq')`),
-    )
+    // ✅ CHANGED: global_version is now text
+    .addColumn("global_version", "text", (c) => c.notNull())
     .addColumn("notebook_id", "uuid", (c) =>
       c.references("notebook.id").onDelete("set null"),
     )
@@ -179,9 +176,8 @@ export async function up(db: Kysely<Database>) {
     .addColumn("updated_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
-    .addColumn("global_version", "bigint", (c) =>
-      c.notNull().defaultTo(sql`nextval('global_version_seq')`),
-    )
+    // ✅ CHANGED: global_version is now text
+    .addColumn("global_version", "text", (c) => c.notNull())
     .addColumn("device_created_at", "timestamp")
     .addColumn("latitude", "double precision")
     .addColumn("longitude", "double precision")
@@ -209,12 +205,6 @@ export async function up(db: Kysely<Database>) {
     ])
     .execute();
 
-  await db.schema
-    .createIndex("link_target_note_id_idx")
-    .on("link")
-    .column("target_note_id")
-    .execute();
-
   // TASK
   await db.schema
     .createTable("task")
@@ -236,9 +226,8 @@ export async function up(db: Kysely<Database>) {
     .addColumn("updated_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
-    .addColumn("global_version", "bigint", (c) =>
-      c.notNull().defaultTo(sql`nextval('global_version_seq')`),
-    )
+    // ✅ CHANGED: global_version is now text
+    .addColumn("global_version", "text", (c) => c.notNull())
     .addColumn("due_at", "timestamptz")
     .addColumn("assignee_id", "uuid")
     .addColumn("alert_sent_at", "timestamptz")
@@ -261,7 +250,8 @@ export async function up(db: Kysely<Database>) {
     )
     .addColumn("entity_id", "uuid", (c) => c.notNull())
     .addColumn("entity_type", "text", (c) => c.notNull())
-    .addColumn("deleted_at_version", "bigint", (c) => c.notNull())
+    // ✅ CHANGED: version column is now text
+    .addColumn("deleted_at_version", "text", (c) => c.notNull())
     .addColumn("deleted_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
@@ -310,12 +300,6 @@ export async function up(db: Kysely<Database>) {
     .execute();
 
   await db.schema
-    .createIndex("cvr_user_id_created_at_idx")
-    .on("client_view_record")
-    .columns(["user_id", "created_at"])
-    .execute();
-
-  await db.schema
     .createTable("change_log")
     .ifNotExists()
     .addColumn("id", "bigserial", (c) => c.primaryKey())
@@ -331,12 +315,6 @@ export async function up(db: Kysely<Database>) {
     .addColumn("created_at", "timestamp", (c) =>
       c.notNull().defaultTo(sql`now()`),
     )
-    .execute();
-
-  await db.schema
-    .createIndex("change_log_client_group_id_id_idx")
-    .on("change_log")
-    .columns(["client_group_id", "id"])
     .execute();
 
   await db.schema
@@ -368,18 +346,6 @@ export async function up(db: Kysely<Database>) {
     .addColumn("was_rejected", "boolean", (c) => c.notNull().defaultTo(false))
     .execute();
 
-  await db.schema
-    .createIndex("block_history_block_id_idx")
-    .on("block_history")
-    .column("block_id")
-    .execute();
-
-  await db.schema
-    .createIndex("block_history_note_id_idx")
-    .on("block_history")
-    .column("note_id")
-    .execute();
-
   // --- 6. Notifications ---
 
   await db.schema
@@ -396,16 +362,9 @@ export async function up(db: Kysely<Database>) {
       c.notNull().defaultTo(sql`now()`),
     )
     .execute();
-
-  await db.schema
-    .createIndex("push_subscription_user_id_idx")
-    .on("push_subscription")
-    .column("user_id")
-    .execute();
 }
 
 export async function down(db: Kysely<Database>) {
-  // Drop in reverse dependency order
   await db.schema.dropTable("push_subscription").ifExists().execute();
   await db.schema.dropTable("block_history").ifExists().execute();
   await db.schema.dropTable("poke_log").ifExists().execute();
@@ -424,5 +383,4 @@ export async function down(db: Kysely<Database>) {
   await db.schema.dropTable("email_verification_token").ifExists().execute();
   await db.schema.dropTable("password_reset_token").ifExists().execute();
   await db.schema.dropTable("user").ifExists().execute();
-  await sql`DROP SEQUENCE IF EXISTS global_version_seq`.execute(db);
 }

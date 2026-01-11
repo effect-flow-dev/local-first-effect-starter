@@ -8,6 +8,8 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "../../types";
 import type { Kysely } from "kysely";
 
+const TEST_HLC = "1736612345000:0001:TEST";
+
 describe("LinkService (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
@@ -27,7 +29,6 @@ describe("LinkService (Integration)", () => {
     return async () => await cleanup();
   });
 
-  // Use a generator function that takes userId
   const setupData = (userId: UserId) => Effect.gen(function* () {
     const sourceNoteId = randomUUID() as NoteId;
     const targetNoteId = randomUUID() as NoteId;
@@ -37,8 +38,18 @@ describe("LinkService (Integration)", () => {
       db
         .insertInto("note")
         .values([
-          { id: sourceNoteId, user_id: userId, title: "Source Note", content: {}, version: 1, created_at: new Date(), updated_at: new Date() },
-          { id: targetNoteId, user_id: userId, title: "Target Note", content: {}, version: 1, created_at: new Date(), updated_at: new Date() },
+          { 
+            id: sourceNoteId, user_id: userId, title: "Source Note", content: {}, version: 1, 
+            created_at: new Date(), updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
+          },
+          { 
+            id: targetNoteId, user_id: userId, title: "Target Note", content: {}, version: 1, 
+            created_at: new Date(), updated_at: new Date(),
+            // ✅ FIXED: Missing global_version
+            global_version: TEST_HLC
+          },
         ])
         .execute(),
     );
@@ -61,7 +72,9 @@ describe("LinkService (Integration)", () => {
           transclusions: [],
           version: 1,
           created_at: new Date(),
-          updated_at: new Date()
+          updated_at: new Date(),
+          // ✅ FIXED: Missing global_version
+          global_version: TEST_HLC
         })
         .execute(),
     );
@@ -72,7 +85,7 @@ describe("LinkService (Integration)", () => {
   it("should resolve note titles to IDs and insert links", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const userId = validUserId; // ✅ Use valid ID
+        const userId = validUserId; 
         const { sourceNoteId, targetNoteId, blockId } = yield* setupData(userId);
 
         yield* updateLinksForNote(db, sourceNoteId, userId);
@@ -97,7 +110,7 @@ describe("LinkService (Integration)", () => {
   it("should remove links when block content changes", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const userId = validUserId; // ✅ Use valid ID
+        const userId = validUserId; 
         const { sourceNoteId, blockId } = yield* setupData(userId);
 
         yield* updateLinksForNote(db, sourceNoteId, userId);

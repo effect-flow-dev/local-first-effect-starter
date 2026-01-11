@@ -6,6 +6,7 @@ import type { UserId, NoteId } from "../shared/schemas";
 
 const VALID_USER_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" as UserId;
 const NOTE_ID = "00000000-0000-0000-0000-000000000001" as NoteId;
+const TEST_HLC = "1736612345000:0001:TEST";
 
 // --- Mocks ---
 const { mockDb, mockDeleteExecute, mockInsertExecute, mockSelectExecute } = vi.hoisted(() => {
@@ -48,7 +49,8 @@ describe("TaskService (Unit)", () => {
         mockDeleteExecute.mockResolvedValue(undefined);
         mockSelectExecute.mockResolvedValue(blocks);
 
-        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID);
+        // ✅ FIXED: Added TEST_HLC argument
+        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID, TEST_HLC);
 
         expect(mockDb.deleteFrom).toHaveBeenCalledWith("task");
         expect(mockDb.insertInto).not.toHaveBeenCalled();
@@ -65,7 +67,8 @@ describe("TaskService (Unit)", () => {
         mockSelectExecute.mockResolvedValue(blocks);
         mockInsertExecute.mockResolvedValue(undefined);
 
-        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID);
+        // ✅ FIXED: Added TEST_HLC argument
+        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID, TEST_HLC);
 
         expect(mockDb.insertInto).toHaveBeenCalledWith("task");
 
@@ -94,7 +97,8 @@ describe("TaskService (Unit)", () => {
         mockSelectExecute.mockResolvedValue(blocks);
         mockInsertExecute.mockResolvedValue(undefined);
 
-        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID);
+        // ✅ FIXED: Added TEST_HLC argument
+        yield* syncTasksForNote(mockDb, NOTE_ID, VALID_USER_ID, TEST_HLC);
 
         const insertResult = mockDb.insertInto.mock.results[0];
         const insertCall = insertResult.value;

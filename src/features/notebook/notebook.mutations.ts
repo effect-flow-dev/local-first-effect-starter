@@ -4,7 +4,6 @@ import { sql, type Transaction, type Kysely } from "kysely";
 import type { Database } from "../../types";
 import { NotebookIdSchema, type UserId } from "../../lib/shared/schemas";
 import { NotebookDatabaseError } from "./Errors";
-import { getNextGlobalVersion } from "../replicache/versioning";
 import { NoteDatabaseError } from "../note/Errors";
 
 export const CreateNotebookArgsSchema = Schema.Struct({
@@ -19,12 +18,11 @@ export const DeleteNotebookArgsSchema = Schema.Struct({
 export const handleCreateNotebook = (
   db: Kysely<Database> | Transaction<Database>,
   args: typeof CreateNotebookArgsSchema.Type,
-  userId: string
+  userId: string,
+  globalVersion: string // ✅ Added HLC parameter
 ) =>
   Effect.gen(function* () {
     yield* Effect.logInfo(`[handleCreateNotebook] ID: ${args.id}`);
-
-    const globalVersion = yield* getNextGlobalVersion(db);
 
     yield* Effect.tryPromise({
       try: () =>
@@ -32,10 +30,10 @@ export const handleCreateNotebook = (
           .insertInto("notebook")
           .values({
             id: args.id,
-            user_id: userId as UserId, // ✅ Cast string to UserId
+            user_id: userId as UserId, 
             name: args.name,
             created_at: sql<Date>`now()`,
-            global_version: String(globalVersion),
+            global_version: globalVersion, // ✅ Use HLC
           })
           .execute(),
       catch: (cause) => new NotebookDatabaseError({ cause }),
@@ -45,19 +43,18 @@ export const handleCreateNotebook = (
 export const handleDeleteNotebook = (
   db: Kysely<Database> | Transaction<Database>,
   args: typeof DeleteNotebookArgsSchema.Type,
-  _userId: string
+  _userId: string,
+  globalVersion: string // ✅ Added HLC parameter
 ) =>
   Effect.gen(function* () {
     yield* Effect.logInfo(`[handleDeleteNotebook] ID: ${args.id}`);
-
-    const globalVersion = yield* getNextGlobalVersion(db);
 
     // 1. Create Tombstone for Notebook
     yield* Effect.tryPromise({
       try: () =>
         sql`
           INSERT INTO tombstone (entity_id, entity_type, deleted_at_version)
-          VALUES (${args.id}, 'notebook', ${String(globalVersion)})
+          VALUES (${args.id}, 'notebook', ${globalVersion})
         `.execute(db),
       catch: (cause) => new NotebookDatabaseError({ cause }),
     });
@@ -70,7 +67,7 @@ export const handleDeleteNotebook = (
           .set({
             version: sql<number>`version + 1`,
             updated_at: sql<Date>`now()`,
-            global_version: String(globalVersion),
+            global_version: globalVersion, // ✅ Use HLC
           })
           .where("notebook_id", "=", args.id)
           .execute(),
