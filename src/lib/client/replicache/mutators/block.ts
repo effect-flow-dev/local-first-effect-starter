@@ -14,7 +14,7 @@ export interface SerializedBlock {
     note_id: NoteId;
     user_id: UserId;
     type: string;
-    content: string;
+    content: string; // JSON string for tiptap_text
     fields: Record<string, unknown>;
     order: number;
     depth: number;
@@ -87,70 +87,34 @@ export const createBlock = async (
     await tx.set(`block/${validatedArgs.blockId}`, newBlock as unknown as ReadonlyJSONValue);
 };
 
-export const updateTask = async (
-    tx: WriteTransaction,
-    args: { blockId: BlockId; isComplete: boolean; version: number; hlcTimestamp?: string; deviceTimestamp?: Date },
-) => {
-    if (!args.blockId) return;
-    const notes = await tx.scan({ prefix: "note/" }).values().toArray();
-
-    for (const noteJson of notes) {
-        const note = noteJson as unknown as NoteStructure;
-        if (!note.content || !Array.isArray(note.content.content)) continue;
-
-        const hasBlock = (nodes: TraversalNode[]): boolean => {
-            for (const node of nodes) {
-                if (node.attrs?.blockId === args.blockId) return true;
-                if (node.content && Array.isArray(node.content)) {
-                    if (hasBlock(node.content)) return true;
-                }
-            }
-            return false;
-        };
-
-        if (hasBlock(note.content.content)) {
-            const updatedNote = JSON.parse(JSON.stringify(note)) as NoteStructure;
-            const updateNode = (nodes: TraversalNode[]): boolean => {
-                for (const node of nodes) {
-                    if (node.attrs?.blockId === args.blockId) {
-                        if (!node.attrs.fields) node.attrs.fields = {};
-
-                        node.attrs.fields.is_complete = args.isComplete;
-                        node.attrs.version = args.version + 1;
-
-                        return true;
-                    }
-                    if (node.content && Array.isArray(node.content)) {
-                        if (updateNode(node.content)) return true;
-                    }
-                }
-                return false;
-            };
-            const didUpdate = updateNode(updatedNote.content!.content!);
-            if (didUpdate) {
-                updatedNote.updated_at = new Date().toISOString();
-                updatedNote.version = (updatedNote.version || 0) + 1;
-                await tx.set(
-                    `note/${updatedNote.id}`,
-                    updatedNote as unknown as ReadonlyJSONValue,
-                );
-
-                const blockKey = `block/${args.blockId}`;
-                const blockJson = await tx.get(blockKey);
-                if (blockJson) {
-                    const updatedBlock = JSON.parse(
-                        JSON.stringify(blockJson),
-                    ) as BlockStructure;
-                    if (!updatedBlock.fields) updatedBlock.fields = {};
-                    updatedBlock.fields.is_complete = args.isComplete;
-                    updatedBlock.version = args.version + 1;
-                    updatedBlock.updated_at = new Date().toISOString();
-                    await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
-                }
-            }
-            return;
+// Helper: Check if block exists in tree (Read-Only)
+const hasBlock = (nodes: readonly TraversalNode[], blockId: string): boolean => {
+    for (const node of nodes) {
+        if (node.attrs?.blockId === blockId) return true;
+        if (node.content && Array.isArray(node.content)) {
+            if (hasBlock(node.content, blockId)) return true;
         }
     }
+    return false;
+};
+
+// Helper: Mutate the tree (Assumes 'nodes' is already a writable clone)
+const updateNestedNode = (nodes: TraversalNode[], args: { blockId: string; fields: Record<string, unknown>; version: number }): boolean => {
+    for (const node of nodes) {
+        if (node.attrs?.blockId === args.blockId) {
+            // Ensure attrs is an object we can write to (it should be if parent was cloned deeply)
+            if (!node.attrs) node.attrs = {};
+            if (!node.attrs.fields) node.attrs.fields = {};
+            
+            node.attrs.fields = { ...node.attrs.fields, ...args.fields };
+            node.attrs.version = args.version + 1;
+            return true;
+        }
+        if (node.content && Array.isArray(node.content)) {
+            if (updateNestedNode(node.content, args)) return true;
+        }
+    }
+    return false;
 };
 
 export const updateBlock = async (
@@ -164,29 +128,108 @@ export const updateBlock = async (
     },
 ): Promise<boolean> => {
     if (!args.blockId) return false;
-    const notes = await tx.scan({ prefix: "note/" }).values().toArray();
 
+    let found = false;
+
+    // 1. Update Isolated Block
+    const blockKey = `block/${args.blockId}`;
+    const blockJson = await tx.get(blockKey);
+    if (blockJson) {
+        const updatedBlock = JSON.parse(JSON.stringify(blockJson)) as BlockStructure;
+        if (!updatedBlock.fields) updatedBlock.fields = {};
+        updatedBlock.fields = { ...updatedBlock.fields, ...args.fields };
+        updatedBlock.version = args.version + 1;
+        updatedBlock.updated_at = new Date().toISOString();
+        await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
+        found = true;
+    }
+
+    // 2. Update Note Content
+    const notes = await tx.scan({ prefix: "note/" }).values().toArray();
+    for (const noteJson of notes) {
+        const note = noteJson as unknown as NoteStructure;
+        
+        if (note.content && typeof note.content === 'object' && Array.isArray(note.content.content)) {
+             // READ-ONLY CHECK FIRST
+             if (hasBlock(note.content.content, args.blockId)) {
+                // CLONE BEFORE MUTATE
+                const updatedNote = JSON.parse(JSON.stringify(note)) as NoteStructure;
+                
+                // Now it is safe to mutate
+                if (updateNestedNode(updatedNote.content!.content as TraversalNode[], args)) {
+                    updatedNote.updated_at = new Date().toISOString();
+                    updatedNote.version = (updatedNote.version || 0) + 1;
+                    await tx.set(`note/${updatedNote.id}`, updatedNote as unknown as ReadonlyJSONValue);
+                    found = true;
+                }
+             }
+        }
+    }
+
+    // 3. Update Tiptap Text Blocks
+    const blocks = await tx.scan({ prefix: "block/" }).values().toArray();
+    for (const b of blocks) {
+        const block = b as unknown as SerializedBlock;
+        if (block.type === "tiptap_text" && block.content) {
+            try {
+                // block.content is a JSON string. Parsing it creates a fresh object (implicitly cloned).
+                // ✅ FIX: Explicit cast to safe type to avoid 'any' error
+                const doc = JSON.parse(block.content) as { content?: TraversalNode[] };
+                
+                if (doc && Array.isArray(doc.content)) {
+                    // We can mutate 'doc' directly since it's a new object from JSON.parse
+                    // ✅ FIX: doc.content is now typed via the cast above
+                    if (updateNestedNode(doc.content, args)) {
+                         const updatedBlock = JSON.parse(JSON.stringify(block)) as SerializedBlock;
+                         updatedBlock.content = JSON.stringify(doc); // Re-serialize mutated doc
+                         
+                         updatedBlock.updated_at = new Date().toISOString();
+                         updatedBlock.version = (updatedBlock.version || 0) + 1;
+                         
+                         await tx.set(`block/${block.id}`, updatedBlock as unknown as ReadonlyJSONValue);
+                         found = true;
+                    }
+                }
+            } catch {
+                // Ignore parse errors (unused 'e' removed)
+            }
+        }
+    }
+
+    return found;
+};
+
+export const updateTask = async (
+    tx: WriteTransaction,
+    args: { blockId: BlockId; isComplete: boolean; version: number; hlcTimestamp?: string; deviceTimestamp?: Date },
+) => {
+    if (!args.blockId) return;
+    
+    // 1. Update Isolated Block
+    const blockKey = `block/${args.blockId}`;
+    const blockJson = await tx.get(blockKey);
+    if (blockJson) {
+        const updatedBlock = JSON.parse(JSON.stringify(blockJson)) as BlockStructure;
+        if (!updatedBlock.fields) updatedBlock.fields = {};
+        updatedBlock.fields.is_complete = args.isComplete;
+        updatedBlock.version = args.version + 1;
+        updatedBlock.updated_at = new Date().toISOString();
+        await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
+    }
+    
+    // 2. Update Note Content
+    const notes = await tx.scan({ prefix: "note/" }).values().toArray();
     for (const noteJson of notes) {
         const note = noteJson as unknown as NoteStructure;
         if (!note.content || !Array.isArray(note.content.content)) continue;
 
-        const hasBlock = (nodes: TraversalNode[]): boolean => {
-            for (const node of nodes) {
-                if (node.attrs?.blockId === args.blockId) return true;
-                if (node.content && Array.isArray(node.content)) {
-                    if (hasBlock(node.content)) return true;
-                }
-            }
-            return false;
-        };
-
-        if (hasBlock(note.content.content)) {
+        if (hasBlock(note.content.content, args.blockId)) {
             const updatedNote = JSON.parse(JSON.stringify(note)) as NoteStructure;
             const updateNode = (nodes: TraversalNode[]): boolean => {
                 for (const node of nodes) {
                     if (node.attrs?.blockId === args.blockId) {
                         if (!node.attrs.fields) node.attrs.fields = {};
-                        node.attrs.fields = { ...node.attrs.fields, ...args.fields };
+                        node.attrs.fields.is_complete = args.isComplete;
                         node.attrs.version = args.version + 1;
                         return true;
                     }
@@ -196,33 +239,14 @@ export const updateBlock = async (
                 }
                 return false;
             };
-            const didUpdate = updateNode(updatedNote.content!.content!);
-            if (didUpdate) {
+            
+            if (updateNode(updatedNote.content!.content!)) {
                 updatedNote.updated_at = new Date().toISOString();
                 updatedNote.version = (updatedNote.version || 0) + 1;
-                await tx.set(
-                    `note/${updatedNote.id}`,
-                    updatedNote as unknown as ReadonlyJSONValue,
-                );
-
-                const blockKey = `block/${args.blockId}`;
-                const blockJson = await tx.get(blockKey);
-                if (blockJson) {
-                    const updatedBlock = JSON.parse(
-                        JSON.stringify(blockJson),
-                    ) as BlockStructure;
-                    if (!updatedBlock.fields) updatedBlock.fields = {};
-                    updatedBlock.fields = { ...updatedBlock.fields, ...args.fields };
-                    updatedBlock.version = args.version + 1;
-                    updatedBlock.updated_at = new Date().toISOString();
-                    await tx.set(blockKey, updatedBlock as unknown as ReadonlyJSONValue);
-                }
-                return true;
+                await tx.set(`note/${updatedNote.id}`, updatedNote as unknown as ReadonlyJSONValue);
             }
-            return false;
         }
     }
-    return false;
 };
 
 export const revertBlock = async (
@@ -241,17 +265,7 @@ export const revertBlock = async (
         const note = noteJson as unknown as NoteStructure;
         if (!note.content || !Array.isArray(note.content.content)) continue;
 
-        const hasBlock = (nodes: TraversalNode[]): boolean => {
-            for (const node of nodes) {
-                if (node.attrs?.blockId === args.blockId) return true;
-                if (node.content && Array.isArray(node.content)) {
-                    if (hasBlock(node.content)) return true;
-                }
-            }
-            return false;
-        };
-
-        if (hasBlock(note.content.content)) {
+        if (hasBlock(note.content.content, args.blockId)) {
             const updatedNote = JSON.parse(JSON.stringify(note)) as NoteStructure;
 
             const revertNode = (nodes: TraversalNode[]): boolean => {
@@ -322,7 +336,7 @@ export const incrementCounter = async (
         return;
     }
 
-    const block = blockVal as unknown as SerializedBlock;
+    const block = JSON.parse(JSON.stringify(blockVal)) as SerializedBlock;
     const currentFields = block.fields || {};
     const oldVal = (typeof currentFields[args.key] === 'number')
         ? (currentFields[args.key] as number)
@@ -344,7 +358,7 @@ export const incrementCounter = async (
         const noteVal = await tx.get(noteKey);
         
         if (noteVal) {
-            const note = noteVal as unknown as NoteStructure;
+            const note = JSON.parse(JSON.stringify(noteVal)) as NoteStructure;
             if (note.content && Array.isArray(note.content.content)) {
                 const updateNode = (nodes: TraversalNode[]): boolean => {
                     let changed = false;

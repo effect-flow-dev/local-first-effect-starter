@@ -9,7 +9,9 @@ export class MediaStorageError extends Data.TaggedError("MediaStorageError")<{
   readonly cause: unknown;
 }> {}
 
-const DB_NAME = "life-io-db";
+// ✅ FIX: Use a dedicated database name to avoid "Object store not found" conflicts
+// if other parts of the app (like HLC) initialized 'life-io-db' without this store.
+const DB_NAME = "life-io-media-v1";
 const STORE_NAME = "media-outbox";
 const mediaStore = createStore(DB_NAME, STORE_NAME);
 
@@ -17,7 +19,6 @@ const mediaStore = createStore(DB_NAME, STORE_NAME);
 const memoryCache = new Map<string, string>();
 
 export const prewarmMemoryCache = (id: string, blobUrl: string) => {
-  // Synchronous log for debugging race conditions
   if (import.meta.env.DEV) {
     console.debug(`[MediaStore] 🔥 Prewarming cache for ${id}`);
   }
@@ -56,7 +57,11 @@ export const savePendingMedia = (id: string, blockId: string, file: File) =>
 
     yield* Effect.tryPromise({
       try: () => set(id, entry, mediaStore),
-      catch: (cause) => new MediaStorageError({ operation: "save", cause }),
+      catch: (cause) => {
+        // ✅ DEBUG: Log actual IDB error cause
+        console.error(`[MediaStore] Failed to save pending upload ${id}. Cause:`, cause);
+        return new MediaStorageError({ operation: "save", cause });
+      },
     });
 
     yield* clientLog("debug", `[MediaStore] Saved pending upload: ${id}`, {

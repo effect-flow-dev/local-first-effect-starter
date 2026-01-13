@@ -10,7 +10,6 @@ const { mockSubscribe } = vi.hoisted(() => ({
 
 // Mock global fetch
 const mockFetch = vi.fn();
-// ✅ FIX: Cast to 'any' to satisfy Bun's stricter Fetch type (missing 'preconnect')
 global.fetch = mockFetch as any;
 
 // Mock Replicache Service
@@ -23,17 +22,16 @@ vi.mock("./replicache", async () => {
   return { ReplicacheService };
 });
 
-// Mock ClientLog to avoid clutter and dependency issues
+// Mock ClientLog
 vi.mock("./clientLog", () => ({
   clientLog: () => Effect.void,
 }));
 
-// Mock Runtime to inject dependencies and handle async Effects
+// Mock Runtime
 vi.mock("./runtime", async () => {
   const { Layer, ManagedRuntime } = await import("effect");
   const { ReplicacheService } = await import("./replicache");
 
-  // Create a layer that provides the Mock Replicache Service
   const MockReplicacheLive = Layer.succeed(
     ReplicacheService,
     ReplicacheService.of({
@@ -41,11 +39,9 @@ vi.mock("./runtime", async () => {
     } as any),
   );
 
-  // Use ManagedRuntime to execute effects
   const testRuntime = ManagedRuntime.make(MockReplicacheLive);
 
   return {
-    // ✅ FIX: Use runPromise to handle the async batched workflow in the service
     runClientUnscoped: (effect: any) => testRuntime.runPromise(effect),
   };
 });
@@ -62,40 +58,38 @@ describe("MediaCacheService (Prefetcher)", () => {
 
   it("subscribes to Replicache on start", async () => {
     startMediaPrefetch();
-    // ✅ FIX: Wait for the effect runtime to initialize and execute the subscription
     await vi.waitUntil(() => mockSubscribe.mock.calls.length > 0);
     expect(mockSubscribe).toHaveBeenCalled();
   });
 
-  it("extracts URLs from index keys and fetches them", async () => {
-    // 1. Start the service
+  it("extracts URLs from blocks and fetches them", async () => {
     startMediaPrefetch();
-
-    // 2. Simulate Replicache callback
-    // The signature is subscribe(query, { onData: ... })
-    // We wait for subscription first
     await vi.waitUntil(() => mockSubscribe.mock.calls.length > 0);
     
     const args = mockSubscribe.mock.calls[0];
-    expect(args).toBeDefined();
-
-    // ✅ FIX: Extract 'onData' from the options object (2nd argument)
     const options = args![1] as { onData: (data: unknown[]) => void };
     const onDataCallback = options.onData;
 
-    // ✅ NEW: Mock data matches the 'imagesByUrl' index format: [SecondaryKey, PrimaryKey][]
-    const mockIndexKeys = [
-      ["https://r2.dev/image-1.png", "block-1"],
-      ["https://r2.dev/nested-image.png", "block-2"],
+    // ✅ FIX: Provide full block objects matching BlockWithUrl interface
+    // The service now scans values(), not keys()
+    const mockBlocks = [
+      {
+        id: "block-1",
+        type: "image",
+        fields: { url: "https://r2.dev/image-1.png" }
+      },
+      {
+        id: "block-2",
+        type: "image",
+        fields: { url: "https://r2.dev/nested-image.png" }
+      },
     ];
 
-    // 3. Trigger the callback logic
-    onDataCallback(mockIndexKeys);
+    onDataCallback(mockBlocks);
 
-    // 4. Wait for batched processing (Service has a 10ms sleep between batches)
+    // Wait for batched processing
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // 5. Verification
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch).toHaveBeenCalledWith(
       "https://r2.dev/image-1.png",
@@ -109,25 +103,21 @@ describe("MediaCacheService (Prefetcher)", () => {
 
   it("ignores non-http URLs", async () => {
     startMediaPrefetch();
-
     await vi.waitUntil(() => mockSubscribe.mock.calls.length > 0);
     
     const args = mockSubscribe.mock.calls[0];
-    expect(args).toBeDefined();
-
     const options = args![1] as { onData: (data: unknown[]) => void };
     const onDataCallback = options.onData;
 
-    // Mock keys with invalid or relative URLs which should be filtered out
-    const mockKeys = [
-      ["/local-asset.png", "block-3"],
-      ["blob:123", "block-4"],
-      [null, "block-5"],
+    // Mock blocks with invalid URLs
+    const mockBlocks = [
+      { id: "b3", type: "image", fields: { url: "/local.png" } },
+      { id: "b4", type: "image", fields: { url: "blob:123" } },
+      { id: "b5", type: "image", fields: { url: null } },
     ];
 
-    onDataCallback(mockKeys);
+    onDataCallback(mockBlocks);
 
-    // Wait for processing
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(mockFetch).not.toHaveBeenCalled();

@@ -62,8 +62,10 @@ const navigationRoute = new NavigationRoute(navigationHandler, {
 
 registerRoute(navigationRoute);
 
-// --- 5. Asset Caching (Images) ---
-const mediaStrategy = new CacheFirst({
+// --- 5. Asset Caching Strategies ---
+
+// Strategy A: Images (High capacity, long retention)
+const imageStrategy = new CacheFirst({
     cacheName: "media-cache",
     matchOptions: {
         ignoreVary: true,
@@ -72,18 +74,50 @@ const mediaStrategy = new CacheFirst({
     plugins: [
         new CacheableResponsePlugin({ statuses: [0, 200] }),
         new ExpirationPlugin({
-            maxEntries: 500,
+            maxEntries: 500, // Keep many images for rich UI
             maxAgeSeconds: 60 * 24 * 60 * 60, // 60 Days
         }),
     ],
 });
 
+// Strategy B: Files (Lower capacity, shorter retention)
+// Prevents massive PDFs/Zips from evicting UI assets
+const fileStrategy = new CacheFirst({
+    cacheName: "files-cache",
+    matchOptions: {
+        ignoreVary: true,
+        ignoreSearch: true,
+    },
+    plugins: [
+        new CacheableResponsePlugin({ statuses: [0, 200] }),
+        new ExpirationPlugin({
+            maxEntries: 50, // Limit number of heavy files
+            maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
+            purgeOnQuotaError: true, // Aggressively purge if disk is full
+        }),
+    ],
+});
+
+const IMAGE_EXTENSIONS = new Set([
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif"
+]);
+
+// Combined Route Matcher for R2/Cloudflare Storage
 registerRoute(
     ({ url }) => {
-        const isMedia = url.hostname.includes("r2.dev") || url.hostname.includes("cloudflarestorage.com");
-        return isMedia;
+        return url.hostname.includes("r2.dev") || url.hostname.includes("cloudflarestorage.com");
     },
-    mediaStrategy
+    ({ url, request, event }) => {
+        // Determine strategy based on file extension
+        const pathname = url.pathname;
+        const extension = pathname.split('.').pop()?.toLowerCase();
+        
+        if (extension && IMAGE_EXTENSIONS.has(extension)) {
+            return imageStrategy.handle({ request, url, event });
+        }
+        
+        return fileStrategy.handle({ request, url, event });
+    }
 );
 
 // --- 6. Map Tile Caching (Offline Maps) ---

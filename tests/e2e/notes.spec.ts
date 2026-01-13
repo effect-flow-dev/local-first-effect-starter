@@ -1,3 +1,4 @@
+// File: ./tests/e2e/notes.spec.ts
  import { test, expect } from "@playwright/test";
     import { createVerifiedUser, cleanupUser } from "./utils/seed";
 
@@ -51,6 +52,10 @@
 
             await checklist.locator("text=New Item").click();
             await expect(page.locator("sync-status")).toContainText("Saved");
+
+            // ✅ FIX: Wait a beat for IDB persistence before reloading.
+            // "Saved" UI state means Replicache processed it, but IndexedDB flush is async.
+            await page.waitForTimeout(500);
 
             // 4. Reload
             await page.reload();

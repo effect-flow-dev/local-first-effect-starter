@@ -171,11 +171,22 @@ export const handleUpdateBlock = (
             }));
         }
 
+        // Logic for extracting 'content' from fields if present
+        let contentUpdate: string | undefined;
+        const fieldsToSave = { ...args.fields };
+        
+        if ('content' in fieldsToSave) {
+            const contentVal = fieldsToSave['content'];
+            contentUpdate = typeof contentVal === 'string' ? contentVal : JSON.stringify(contentVal);
+            // Remove content from fields JSONB to avoid duplication/confusion
+            delete fieldsToSave['content'];
+        }
+
         let validationWarning: string | undefined = undefined;
         let validationStatus: "warning" | null = null;
         if (blockRow.type === "form_meter") {
             const currentFields = (blockRow.fields as Record<string, unknown>) || {};
-            const mergedFields = { ...currentFields, ...args.fields };
+            const mergedFields = { ...currentFields, ...fieldsToSave };
             const val = Number(mergedFields.value);
             const min = Number(mergedFields.min ?? 0);
             const max = Number(mergedFields.max ?? 100);
@@ -185,7 +196,7 @@ export const handleUpdateBlock = (
             }
         }
 
-        const fieldsToSave = { ...args.fields, validation_status: validationStatus };
+        fieldsToSave.validation_status = validationStatus;
 
         if (blockRow?.note_id) {
             const noteRow = yield* Effect.tryPromise({
@@ -195,7 +206,8 @@ export const handleUpdateBlock = (
 
             if (noteRow && noteRow.content) {
                 const content = JSON.parse(typeof noteRow.content === "string" ? noteRow.content : JSON.stringify(noteRow.content)) as ContentNode;
-                if (updateBlockInContent(content, args.blockId, fieldsToSave, validationWarning)) {
+                // ✅ FIX: Pass contentUpdate to updateBlockInContent to keep note JSON consistent
+                if (updateBlockInContent(content, args.blockId, fieldsToSave, validationWarning, contentUpdate)) {
                     yield* Effect.tryPromise({
                         try: () => db.updateTable("note").set({
                             content: JSON.stringify(content),
@@ -211,18 +223,34 @@ export const handleUpdateBlock = (
 
         if (blockRow.type === "task" || blockRow.type === "interactiveBlock") {
             yield* _syncTaskTable(db, args.blockId, {
-                is_complete: args.fields["is_complete"] as boolean | undefined,
-                due_at: args.fields["due_at"] as string | null | undefined
+                is_complete: fieldsToSave["is_complete"] as boolean | undefined,
+                due_at: fieldsToSave["due_at"] as string | null | undefined
             }, globalVersion);
         }
 
+        // Update Block Table
         yield* Effect.tryPromise({
-            try: () => db.updateTable("block").set({
-                fields: sql`fields || ${JSON.stringify(fieldsToSave)}::jsonb`,
-                version: sql<number>`version + 1`,
-                updated_at: sql<Date>`now()`,
-                global_version: globalVersion,
-            }).where("id", "=", args.blockId).execute(),
+            try: () => {
+                const updateQuery = db.updateTable("block")
+                    .set({
+                        fields: sql`fields || ${JSON.stringify(fieldsToSave)}::jsonb`,
+                        version: sql<number>`version + 1`,
+                        updated_at: sql<Date>`now()`,
+                        global_version: globalVersion,
+                    });
+                
+                if (contentUpdate !== undefined) {
+                    return db.updateTable("block").set({
+                        content: contentUpdate,
+                        fields: sql`fields || ${JSON.stringify(fieldsToSave)}::jsonb`,
+                        version: sql<number>`version + 1`,
+                        updated_at: sql<Date>`now()`,
+                        global_version: globalVersion,
+                    }).where("id", "=", args.blockId).execute();
+                } else {
+                    return updateQuery.where("id", "=", args.blockId).execute();
+                }
+            },
             catch: (cause) => new NoteDatabaseError({ cause }),
         });
     });

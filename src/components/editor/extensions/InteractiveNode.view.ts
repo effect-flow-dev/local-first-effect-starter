@@ -3,15 +3,18 @@ import type { NodeView, EditorView } from "@tiptap/pm/view";
 import type { Node as ProsemirrorNode } from "@tiptap/pm/model";
 import type { InteractiveProsemirrorNode, BlockFieldUpdateDetail } from "./InteractiveNode.types";
 
-// Import custom elements for side-effects
 import "../node-views/task-node-view";
 import "../node-views/image-block-node-view";
+import "../node-views/file-attachment-node-view";
 
 export class InteractiveBlockNodeView implements NodeView {
   public dom: HTMLElement;
   public contentDOM: HTMLElement;
+  
   private taskView?: HTMLElement; 
   private imageComponent?: HTMLElement;
+  private fileComponent?: HTMLElement;
+
   private node: InteractiveProsemirrorNode;
 
   constructor(
@@ -35,7 +38,6 @@ export class InteractiveBlockNodeView implements NodeView {
       this.dom.setAttribute("data-block-id", this.node.attrs.blockId);
     }
 
-    // Listen for events from children
     this.dom.addEventListener("delete-block", this.handleDelete);
     this.dom.addEventListener("update-block-field", this.handleBlockFieldUpdate as EventListener);
 
@@ -64,12 +66,9 @@ export class InteractiveBlockNodeView implements NodeView {
 
   stopEvent(event: Event): boolean {
     const target = event.target as globalThis.Node;
-    if (this.taskView && this.taskView.contains(target)) {
-        return true;
-    }
-    if (this.imageComponent && this.imageComponent.contains(target)) {
-        return true;
-    }
+    if (this.taskView && this.taskView.contains(target)) return true;
+    if (this.imageComponent && this.imageComponent.contains(target)) return true;
+    if (this.fileComponent && this.fileComponent.contains(target)) return true;
     return false;
   }
 
@@ -84,20 +83,25 @@ export class InteractiveBlockNodeView implements NodeView {
       this.imageComponent.remove();
       this.imageComponent = undefined;
     }
+    if (this.fileComponent) {
+      this.fileComponent.remove();
+      this.fileComponent = undefined;
+    }
+
+    const fields = this.node.attrs.fields;
 
     if (type === "task") {
       this.taskView = document.createElement("task-node-view");
       this.taskView.contentEditable = "false"; 
 
-      const status = this.node.attrs.fields?.status || (this.node.attrs.fields?.is_complete ? "done" : "todo");
-      const dueAt = this.node.attrs.fields?.due_at || ""; // ✅ Get due_at
+      const status = fields?.status || (fields?.is_complete ? "done" : "todo");
+      const dueAt = fields?.due_at || "";
       
       this.taskView.setAttribute("status", status);
       if (dueAt) {
-          this.taskView.setAttribute("dueAt", dueAt); // ✅ Pass dueAt prop
+          this.taskView.setAttribute("dueAt", dueAt);
       }
-      
-      if (this.node.attrs.fields?.is_complete) {
+      if (fields?.is_complete) {
         this.taskView.setAttribute("isComplete", "true");
       }
       
@@ -113,15 +117,29 @@ export class InteractiveBlockNodeView implements NodeView {
       this.imageComponent.style.display = "block";
       this.imageComponent.style.width = "100%";
 
-      const fields = this.node.attrs.fields;
       if (fields.url) this.imageComponent.setAttribute("url", fields.url);
-      if (fields.uploadId)
-        this.imageComponent.setAttribute("uploadId", fields.uploadId);
+      if (fields.uploadId) this.imageComponent.setAttribute("uploadId", fields.uploadId);
 
       this.dom.appendChild(this.imageComponent);
       this.dom.appendChild(this.contentDOM);
       this.contentDOM.setAttribute("data-placeholder", "Write a caption...");
       this.contentDOM.classList.add("text-sm", "text-zinc-500", "mt-1");
+
+    } else if (type === "file_attachment") {
+        this.fileComponent = document.createElement("file-attachment-node-view");
+        this.fileComponent.contentEditable = "false";
+        this.fileComponent.style.display = "block";
+        this.fileComponent.style.width = "100%";
+
+        if (fields.filename) this.fileComponent.setAttribute("filename", fields.filename);
+        if (fields.size) this.fileComponent.setAttribute("size", String(fields.size));
+        if (fields.mimeType) this.fileComponent.setAttribute("mimeType", fields.mimeType);
+        if (fields.url) this.fileComponent.setAttribute("url", fields.url);
+        if (fields.uploadId) this.fileComponent.setAttribute("uploadId", fields.uploadId);
+
+        this.dom.appendChild(this.fileComponent);
+        this.dom.appendChild(this.contentDOM); 
+
     } else {
       this.dom.appendChild(this.contentDOM);
     }
@@ -160,17 +178,17 @@ export class InteractiveBlockNodeView implements NodeView {
     if (node.attrs.blockType !== this.node.attrs.blockType) return false;
 
     this.node = node as InteractiveProsemirrorNode;
+    const fields = this.node.attrs.fields;
 
     if (this.node.attrs.blockId) {
       this.dom.setAttribute("data-block-id", this.node.attrs.blockId);
     }
 
     if (this.node.attrs.blockType === "task" && this.taskView) {
-      const status = this.node.attrs.fields?.status || (this.node.attrs.fields?.is_complete ? "done" : "todo");
-      const dueAt = this.node.attrs.fields?.due_at || ""; // ✅
+      const status = fields?.status || (fields?.is_complete ? "done" : "todo");
+      const dueAt = fields?.due_at || "";
       
       this.taskView.setAttribute("status", status);
-      // Update or remove attribute
       if (dueAt) {
           this.taskView.setAttribute("dueAt", dueAt);
       } else {
@@ -178,8 +196,8 @@ export class InteractiveBlockNodeView implements NodeView {
       }
     }
 
+    // ✅ FIX: Ensure file_attachment update logic matches render logic
     if (this.node.attrs.blockType === "image" && this.imageComponent) {
-      const fields = this.node.attrs.fields;
       if (fields.url) {
         this.imageComponent.setAttribute("url", fields.url);
       } else {
@@ -188,6 +206,21 @@ export class InteractiveBlockNodeView implements NodeView {
       if (fields.uploadId) {
         this.imageComponent.setAttribute("uploadId", fields.uploadId);
       }
+    }
+
+    if (this.node.attrs.blockType === "file_attachment" && this.fileComponent) {
+        if (fields.url) this.fileComponent.setAttribute("url", fields.url);
+        else this.fileComponent.removeAttribute("url");
+
+        if (fields.uploadId) {
+            this.fileComponent.setAttribute("uploadId", fields.uploadId);
+        } else {
+            this.fileComponent.removeAttribute("uploadId");
+        }
+        
+        if (fields.filename) this.fileComponent.setAttribute("filename", fields.filename);
+        if (fields.size) this.fileComponent.setAttribute("size", String(fields.size));
+        if (fields.mimeType) this.fileComponent.setAttribute("mimeType", fields.mimeType);
     }
 
     return true;

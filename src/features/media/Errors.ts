@@ -9,6 +9,7 @@ export class InvalidFileTypeError extends Data.TaggedError(
   "InvalidFileTypeError",
 )<{
   readonly type: string;
+  readonly allowedTypes?: readonly string[];
 }> {}
 
 export class FileTooLargeError extends Data.TaggedError("FileTooLargeError")<{
@@ -16,7 +17,7 @@ export class FileTooLargeError extends Data.TaggedError("FileTooLargeError")<{
   readonly limit: number;
 }> {}
 
-// ✅ FIX: Add optional cause to schema so we can wrap formData() errors
 export class MissingFileError extends Data.TaggedError("MissingFileError")<{
   readonly cause?: unknown;
+  readonly message?: string;
 }> {}

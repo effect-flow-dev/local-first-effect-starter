@@ -3,13 +3,20 @@ import type { Node as ProsemirrorNode } from "@tiptap/pm/model";
 
 export interface InteractiveNodeAttributes {
   blockId: string | null;
-  // Updated block types including 'map_block' and 'tiptap_text'
-  blockType: "text" | "task" | "image" | "form_checklist" | "form_meter" | "map_block" | "tiptap_text";
+  // Updated block types including 'file_attachment'
+  blockType: 
+    | "text" 
+    | "task" 
+    | "image" 
+    | "form_checklist" 
+    | "form_meter" 
+    | "map_block" 
+    | "tiptap_text"
+    | "file_attachment"; // ✅ Added
   version?: number;
   fields: {
     is_complete?: boolean;
     status?: "todo" | "in_progress" | "done" | "blocked"; 
-    // ✅ FIX: Add due_at for Task alerts
     due_at?: string;
     url?: string;
     uploadId?: string;
@@ -24,6 +31,11 @@ export interface InteractiveNodeAttributes {
     label?: string;
     zoom?: number;
     style?: string;
+    validation_status?: string;
+    // ✅ NEW: File fields
+    filename?: string;
+    size?: number;
+    mimeType?: string;
   };
 }
 

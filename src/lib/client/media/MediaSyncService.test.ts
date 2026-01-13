@@ -1,6 +1,6 @@
 // FILE: src/lib/client/media/MediaSyncService.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, TestContext, TestClock } from "effect";
 import { MediaSyncLive, MediaSyncService } from "./MediaSyncService";
 import { ReplicacheService } from "../replicache";
 import * as mediaStore from "./mediaStore";
@@ -27,7 +27,8 @@ const mockReplicacheMutate = {
 
 const mockReplicacheClient = {
   mutate: mockReplicacheMutate,
-  query: vi.fn().mockResolvedValue([]), 
+  query: vi.fn().mockResolvedValue([]),
+  subscribe: vi.fn(), // Mock subscribe as it is used in MediaSyncLive init
 };
 
 const ReplicacheMock = Layer.succeed(
@@ -37,20 +38,16 @@ const ReplicacheMock = Layer.succeed(
   } as any),
 );
 
-// Helper to run the service layer
-const runTestLayer = <A>(effect: Effect.Effect<A, any, MediaSyncService>) =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.provide(MediaSyncLive),
-      Effect.provide(ReplicacheMock),
-      Effect.scoped,
-    ) as Effect.Effect<A, any, never>
-  );
+// We construct the test layer such that MediaSyncLive receives the TestContext (Clock/Scheduler)
+// Order matters: TestContext -> Replicache -> MediaSync
+const MainTestLayer = MediaSyncLive.pipe(
+  Layer.provide(ReplicacheMock),
+  Layer.provide(TestContext.TestContext) 
+);
 
 describe("MediaSyncService Integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // ✅ FIX: Mock LocalStorage JWT so the service doesn't fail with "No JWT" before attempting upload
     localStorage.setItem("jwt", "mock-token");
 
     // Default API Success
@@ -62,7 +59,7 @@ describe("MediaSyncService Integration", () => {
 
     // Default Replicache Success
     mockReplicacheMutate.updateBlock.mockResolvedValue(true);
-    mockReplicacheClient.query.mockResolvedValue([]); 
+    mockReplicacheClient.query.mockResolvedValue([]);
 
     // Default Store Mocks
     vi.mocked(mediaStore.getAllPendingMedia).mockReturnValue(Effect.succeed([]));
@@ -79,19 +76,19 @@ describe("MediaSyncService Integration", () => {
 
   it("Test 1 (Persistence): Item remains in IDB on transient failure (500)", async () => {
     const uploadId = "upload-persist";
-    
+
     // 1. Setup IDB State
     vi.mocked(mediaStore.getPendingMedia).mockReturnValue(
       Effect.succeed({
         id: uploadId,
         blockId: "b1",
         file: new File([""], "f.png"),
-        status: "pending", // Initial state
+        status: "pending",
         mimeType: "image/png",
         createdAt: Date.now(),
         retryCount: 0,
         lastAttemptAt: null,
-        lastError: null
+        lastError: null,
       }),
     );
 
@@ -102,35 +99,40 @@ describe("MediaSyncService Integration", () => {
       status: 500,
     } as any);
 
-    // 3. Queue Upload
-    await runTestLayer(
+    // 3. Run Test Effect
+    await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* MediaSyncService;
+        
+        // Queue the upload
         yield* service.queueUpload(uploadId);
-        // Allow event loop to process initial attempt
-        yield* Effect.sleep("20 millis");
-      }),
+        
+        // Yield to allow the background queue fiber to pick up the item
+        yield* Effect.yieldNow();
+
+        // Advance time past the 1500ms sleep in 'processUpload'
+        // Since we provided TestContext to the layer, this adjusts the service's clock
+        yield* TestClock.adjust("2 seconds");
+        
+        // Yield again to let the service execute the logic after waking up
+        yield* Effect.yieldNow();
+      }).pipe(
+        Effect.provide(MainTestLayer),
+        Effect.scoped // Manages the forkDaemon lifecycles
+      )
     );
 
     // 4. Assertions
-    // Should mark as uploading initially
     expect(mediaStore.updateMediaStatus).toHaveBeenCalledWith(uploadId, "uploading");
-    
-    // Should NOT be marked as fatal error
     expect(mediaStore.updateMediaStatus).not.toHaveBeenCalledWith(uploadId, "error");
-    
-    // CRITICAL: Should NOT be removed from IDB (Data Safety)
     expect(mediaStore.removePendingMedia).not.toHaveBeenCalled();
-    
-    // Should have attempted retry logic (incrementing counters)
-    // Note: The schedule runs incrementRetry *before* the delay
     expect(mediaStore.incrementRetry).toHaveBeenCalled();
   });
 
   it("Test 2 (Resume): Picks up pending uploads from IDB on initialization", async () => {
     const pendingId = "upload-resume";
-    
-    // 1. Setup IDB with existing pending item
+
+    // 1. Setup IDB with existing pending item (for the resume scan)
     vi.mocked(mediaStore.getAllPendingMedia).mockReturnValue(
       Effect.succeed([
         {
@@ -142,8 +144,8 @@ describe("MediaSyncService Integration", () => {
           createdAt: Date.now(),
           retryCount: 0,
           lastAttemptAt: null,
-          lastError: null
-        }
+          lastError: null,
+        },
       ]),
     );
 
@@ -158,35 +160,37 @@ describe("MediaSyncService Integration", () => {
         createdAt: Date.now(),
         retryCount: 0,
         lastAttemptAt: null,
-        lastError: null
+        lastError: null,
       })
     );
 
-    // 2. Initialize Service (Simulate App Start)
-    await runTestLayer(
+    await Effect.runPromise(
       Effect.gen(function* () {
-        // Just accessing the service triggers the Layer effect (init logic)
+        // Just accessing the service triggers the Layer initialization
         yield* MediaSyncService;
-        // Wait for resume logic to enqueue and process
-        yield* Effect.sleep("20 millis");
-      }),
+
+        // Allow the 'resumePending' fiber to fork and run
+        yield* Effect.yieldNow();
+
+        // Advance past startup delay
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow();
+      }).pipe(
+        Effect.provide(MainTestLayer),
+        Effect.scoped
+      )
     );
 
     // 3. Assertions
-    // Should have scanned IDB
     expect(mediaStore.getAllPendingMedia).toHaveBeenCalled();
-    
-    // Should have started processing the item
     expect(mediaStore.getPendingMedia).toHaveBeenCalledWith(pendingId);
     expect(api.api.media.upload.post).toHaveBeenCalled();
-    
-    // Should succeed and clean up
     expect(mediaStore.removePendingMedia).toHaveBeenCalledWith(pendingId);
   });
 
   it("Test 3 (Fatal Stop): 413 error marks item as Error and stops retrying", async () => {
     const uploadId = "upload-fatal";
-    
+
     // 1. Setup IDB
     vi.mocked(mediaStore.getPendingMedia).mockReturnValue(
       Effect.succeed({
@@ -198,7 +202,7 @@ describe("MediaSyncService Integration", () => {
         createdAt: Date.now(),
         retryCount: 0,
         lastAttemptAt: null,
-        lastError: null
+        lastError: null,
       }),
     );
 
@@ -209,23 +213,23 @@ describe("MediaSyncService Integration", () => {
       status: 413,
     } as any);
 
-    // 3. Queue Upload
-    await runTestLayer(
+    await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* MediaSyncService;
         yield* service.queueUpload(uploadId);
-        yield* Effect.sleep("20 millis");
-      }),
+        
+        yield* Effect.yieldNow();
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow();
+      }).pipe(
+        Effect.provide(MainTestLayer),
+        Effect.scoped
+      )
     );
 
     // 4. Assertions
-    // Should update status to 'error' to notify UI
     expect(mediaStore.updateMediaStatus).toHaveBeenCalledWith(uploadId, "error");
-    
-    // Should NOT increment retry (Schedule.while predicate fails for FatalUploadError)
     expect(mediaStore.incrementRetry).not.toHaveBeenCalled();
-    
-    // Should NOT remove from IDB (allows user to see error/delete manually)
     expect(mediaStore.removePendingMedia).not.toHaveBeenCalled();
   });
 });

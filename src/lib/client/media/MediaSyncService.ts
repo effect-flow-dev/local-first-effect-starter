@@ -83,16 +83,11 @@ const findBlockVersionInDB = (
 // --- Retry Policy ---
 
 const makeRetrySchedule = (uploadId: string) => 
-  Schedule.exponential("1 second", 2.0).pipe(
-    // Cap delay at 1 minute
+  Schedule.exponential("500 millis", 2.0).pipe(
     Schedule.map((d) => Duration.min(d, Duration.minutes(1))),
-    // Add jitter
     Schedule.jittered,
-    // Log and Persist Retry
     Schedule.tapInput((error) => 
       Effect.gen(function*() {
-        // ✅ FIX: Only increment retry if it is a TransientUploadError.
-        // Fatal errors stop the schedule via 'while' elsewhere, but tapInput might see them first.
         if (error instanceof TransientUploadError) {
             const msg = error.message;
             yield* clientLog("warn", `[MediaSync] Retrying ${uploadId} after error: ${msg}`);
@@ -112,7 +107,7 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
     
     if (!item) {
       yield* clientLog("warn", `[MediaSync] Item ${uploadId} missing. Stopping.`);
-      return; // Stop retrying, it's gone
+      return; 
     }
 
     if (item.status === "uploaded") {
@@ -122,11 +117,8 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
 
     yield* updateMediaStatus(uploadId, "uploading");
 
-    // ✅ FIX: Retrieve JWT for Authorization header
     const token = localStorage.getItem("jwt");
     if (!token) {
-        // If we have no token, we can't upload. This is a transient error
-        // because the user might log in later.
         return yield* Effect.fail(new TransientUploadError({ message: "No JWT token found" }));
     }
 
@@ -136,7 +128,6 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
         {
           file: item.file
         },
-        // ✅ FIX: Add headers to the request options
         {
             headers: {
                 Authorization: `Bearer ${token}`
@@ -153,13 +144,9 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
           ? (error.value as { error: string }).error
           : `HTTP ${status}`;
 
-      // Fatal Errors: 400 (Bad Request), 413 (Too Large), 415 (Type)
       if (status === 400 || status === 413 || status === 415) {
         return yield* Effect.fail(new FatalUploadError({ message: `Fatal (${status}): ${errorMsg}` }));
       }
-
-      // Transient Errors: 401 (Auth might refresh), 500, 502, 503, 504, or Network
-      // Note: 401 is treated as transient because the user might just need to re-login.
       return yield* Effect.fail(new TransientUploadError({ message: `Transient (${status}): ${errorMsg}` }));
     }
 
@@ -171,44 +158,55 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
     yield* clientLog("info", `[MediaSync] Uploaded to Cloud: ${publicUrl}`);
 
     // 2. Update Replicache (The Block)
-    // We treat "Block Not Found" as Transient (sync lag). 
-    // We retry this entire flow (including checking IDB) until the block appears.
-    const currentVersion = yield* findBlockVersionInDB(replicache, item.blockId);
+    let currentVersion = 1;
+    try {
+        currentVersion = yield* findBlockVersionInDB(replicache, item.blockId);
+    } catch (e) {
+        yield* clientLog("error", `[MediaSync] Failed to find block version for ${item.blockId}`, e);
+    }
 
-    const updated = yield* Effect.tryPromise(() =>
-      replicache.client.mutate.updateBlock({
-        // ✅ FIX: Use proper type cast (safe because we validated it implicitly)
-        blockId: item.blockId as BlockId, 
-        fields: {
-          url: publicUrl,
-          uploadId: null, 
-        },
-        version: currentVersion
-      })
-    );
+    let updated = false;
+    try {
+        updated = yield* Effect.tryPromise({
+            try: () =>
+                replicache.client.mutate.updateBlock({
+                    blockId: item.blockId as BlockId, 
+                    fields: {
+                    url: publicUrl,
+                    uploadId: null, 
+                    },
+                    version: currentVersion
+                }),
+            catch: (e) => new TransientUploadError({ message: `Mutation Failed in TryPromise: ${String(e)}` })
+        });
+    } catch (e) {
+        // Double catch for safety if tryPromise itself throws (rare)
+        yield* clientLog("error", `[MediaSync] Replicache mutation exception`, e);
+        return yield* Effect.fail(new TransientUploadError({ message: `Mutation Exception: ${String(e)}` }));
+    }
 
     if (!updated) {
-       // If updateBlock returns false, it means the blockId wasn't found in any note content.
-       // This likely means the note sync hasn't arrived or the block was deleted.
-       // We'll treat this as Transient for now (waiting for sync).
+       const notes = yield* Effect.promise(() => replicache.client.query(tx => tx.scan({prefix: "note/"}).keys().toArray()));
+       yield* clientLog("warn", `[MediaSync] UpdateBlock returned false for ${item.blockId}. Notes in DB: ${notes.length}`);
+       
        return yield* Effect.fail(new TransientUploadError({ message: `Block ${item.blockId} not found in Replicache` }));
     }
 
-    // Success!
     yield* clientLog("info", `[MediaSync] Block ${item.blockId} updated. Cleaning up.`);
     yield* removePendingMedia(uploadId);
   }).pipe(
-    // Catch fetch network errors (which become UnknownException in tryPromise)
     Effect.catchAll((e) => {
       if (e instanceof FatalUploadError || e instanceof TransientUploadError) {
         return Effect.fail(e);
       }
-      return Effect.fail(new TransientUploadError({ message: `Network/System Error: ${String(e)}` }));
+      // Log unexpected errors specifically
+      return Effect.fail(new TransientUploadError({ message: `System Error: ${e instanceof Error ? e.message : String(e)}` }));
     })
   );
 
 const processUpload = (uploadId: string, replicache: IReplicacheService) =>
-  performUploadAttempt(uploadId, replicache).pipe(
+  Effect.sleep("1500 millis").pipe(
+    Effect.andThen(performUploadAttempt(uploadId, replicache)),
     Effect.retry({
       schedule: makeRetrySchedule(uploadId),
       while: (err) => err instanceof TransientUploadError
@@ -217,7 +215,6 @@ const processUpload = (uploadId: string, replicache: IReplicacheService) =>
       Effect.gen(function*() {
         yield* clientLog("error", `[MediaSync] Fatal Error for ${uploadId}: ${err.message}`);
         yield* updateMediaStatus(uploadId, "error");
-        // We do NOT remove from IDB, allowing manual intervention/inspection later
       })
     ),
     Effect.catchAll((err) => 
@@ -234,7 +231,7 @@ export const MediaSyncLive = Layer.effect(
     const pipeline = Stream.fromQueue(queue).pipe(
       Stream.mapEffect(
         (id) => processUpload(id, replicache),
-        { concurrency: 2 } // Limit concurrent uploads
+        { concurrency: 2 } 
       ),
       Stream.runDrain
     );
@@ -245,7 +242,6 @@ export const MediaSyncLive = Layer.effect(
       const allItems = yield* getAllPendingMedia();
       let count = 0;
       for (const item of allItems) {
-        // Resume anything not permanently failed or completed
         if (item.status !== "uploaded") {
           yield* Queue.offer(queue, item.id);
           count++;

@@ -5,89 +5,123 @@ import { clientLog } from "./clientLog";
 import { runClientUnscoped } from "./runtime";
 
 // Module-level cache to deduplicate downloads across the session.
-// This prevents re-downloading the same image if the subscription fires multiple times
-// or if the user navigates away and back (SPA navigation).
 const _processedCache = new Set<string>();
+
+// Threshold for auto-downloading non-image files (5MB)
+const FILE_AUTO_DOWNLOAD_LIMIT = 5 * 1024 * 1024;
+
+interface BlockWithUrl {
+  id: string;
+  type: string;
+  fields: {
+    url?: string;
+    size?: number;
+    mimeType?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// ✅ FIX: Use 'unknown' instead of 'ReadonlyJSONValue' to avoid TS2677.
+// This allows the type guard to narrow ANY value down to our specific BlockWithUrl interface.
+const isBlockWithUrl = (val: unknown): val is BlockWithUrl => {
+  if (typeof val !== "object" || val === null) return false;
+  const b = val as Record<string, unknown>;
+  return (
+    typeof b.id === "string" &&
+    typeof b.type === "string" &&
+    typeof b.fields === "object" &&
+    b.fields !== null &&
+    typeof (b.fields as Record<string, unknown>).url === "string"
+  );
+};
 
 export const startMediaPrefetch = () => {
   const effect = Effect.gen(function* () {
     const replicache = yield* ReplicacheService;
 
-    // Use the 'imagesByUrl' index defined in replicache.ts.
-    // This provides a flat list of [url, blockId] tuples without loading full note content.
-    // This is significantly faster than scanning "note/" and parsing JSON.
+    // We scan the 'imagesByUrl' index.
+    // Previously we only scanned keys, now we scan values (full blocks) to inspect metadata (size/type).
     replicache.client.subscribe(
       async (tx) => {
-        // Returns: [[url, blockId], [url, blockId], ...] sorted by URL
-        return await tx.scan({ indexName: "imagesByUrl" }).keys().toArray();
+        return await tx.scan({ indexName: "imagesByUrl" }).values().toArray();
       },
       {
-        onData: (keys) => {
-          // 1. Filter new URLs synchronously
-          // Iterate the keys (tuples) and extract the URL (first element).
-          const newUrls = new Set<string>();
-          
-          for (const key of keys) {
-            // Replicache index keys are [SecondaryKey, PrimaryKey] -> [Url, BlockId]
-            const entry = key as [string, string];
-            const url = entry[0];
-            
-            // Check validity and cache status
-            if (url && typeof url === "string" && !_processedCache.has(url)) {
-              if (url.startsWith("http")) {
-                newUrls.add(url);
-                // Mark as processed immediately to prevent duplicate queuing
-                _processedCache.add(url);
+        onData: (blocks) => {
+          // 1. Identify needed URLs synchronously
+          const urlsToFetch = new Set<string>();
+
+          for (const block of blocks) {
+            if (!isBlockWithUrl(block)) continue;
+
+            const url = block.fields.url;
+            if (!url || !url.startsWith("http")) continue;
+            if (_processedCache.has(url)) continue;
+
+            // ✅ Logic: Selective Prefetching
+            let shouldFetch = false;
+
+            if (block.type === "image") {
+              // Always prefetch images for instant UI
+              shouldFetch = true;
+            } else if (block.type === "file_attachment") {
+              // Check size for files
+              const size = block.fields.size;
+              if (typeof size === "number" && size <= FILE_AUTO_DOWNLOAD_LIMIT) {
+                shouldFetch = true;
+              } else if (typeof size === "number") {
+                // Log skip for debugging (verbose only)
+                if (import.meta.env.DEV) {
+                    console.debug(`[MediaCache] Skipping large file prefetch: ${size} bytes`);
+                }
+              } else {
+                // If size is unknown/missing, fetch to ensure availability
+                shouldFetch = true;
               }
+            }
+
+            if (shouldFetch) {
+              urlsToFetch.add(url);
+              _processedCache.add(url);
             }
           }
 
-          if (newUrls.size === 0) return;
+          if (urlsToFetch.size === 0) return;
 
           runClientUnscoped(
             clientLog(
               "debug",
-              `[MediaCache] Found ${newUrls.size} new media URLs to prefetch via Index.`,
+              `[MediaCache] Found ${urlsToFetch.size} new items to prefetch.`,
             ),
           );
 
-          // 2. Process in Batches (Time-Slicing)
-          // We convert to an array and process in chunks to yield to the main thread.
-          const urlList = Array.from(newUrls);
+          // 2. Process in Batches
+          const urlList = Array.from(urlsToFetch);
           const BATCH_SIZE = 50;
 
           const prefetchWorkflow = Effect.gen(function* () {
             for (let i = 0; i < urlList.length; i += BATCH_SIZE) {
               const batch = urlList.slice(i, i + BATCH_SIZE);
 
-              // 3. Network Control (Traffic Fix)
-              // We strictly limit concurrency to 4 to avoid starving Replicache sync packets
-              // or blocking interaction on low-bandwidth connections.
+              // 3. Network Control
               yield* Effect.forEach(
                 batch,
                 (url) =>
                   Effect.tryPromise({
                     try: () =>
                       fetch(url, {
-                        // "no-cors" allows opacity (we don't need to read pixels, just cache)
-                        // This allows caching images from 3rd party domains without strict CORS headers
                         mode: "no-cors",
-                        // "low" priority hints the browser to prioritize other traffic (like API calls)
                         priority: "low",
                       }),
-                    // Swallow errors to keep the batch going; caching is best-effort.
                     catch: () => Promise.resolve(),
                   }),
-                { concurrency: 4 }, // ✅ Strict limit
+                { concurrency: 4 },
               );
 
-              // 4. Yield to the event loop
-              // This ensures input handling and rendering can occur between batches
               yield* Effect.sleep("10 millis");
             }
           });
 
-          // Run the workflow in the background
           runClientUnscoped(prefetchWorkflow);
         },
       },

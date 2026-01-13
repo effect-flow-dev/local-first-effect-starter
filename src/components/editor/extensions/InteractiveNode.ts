@@ -115,7 +115,8 @@ export const InteractiveNode = Node.create<{
           return false;
         }
 
-        if ($from.parent.attrs.blockType === "image") {
+        // Handle enter on Image or File Attachment blocks: Create new text block below
+        if ($from.parent.attrs.blockType === "image" || $from.parent.attrs.blockType === "file_attachment") {
           return this.editor.commands.insertContentAt($from.after(), {
             type: this.type.name,
             attrs: {
@@ -200,11 +201,12 @@ export const InteractiveNode = Node.create<{
             }
 
             for (const item of Array.from(items)) {
-              if (item.type.indexOf("image") === 0) {
+              // ✅ MODIFIED: Allow any file kind, not just images
+              if (item.kind === "file") {
                 const file = item.getAsFile();
                 if (file) {
                   if (runClientUnscoped) {
-                      runClientUnscoped(clientLog("debug", "[InteractiveNode] Image file found", { name: file.name, type: file.type }));
+                      runClientUnscoped(clientLog("debug", "[InteractiveNode] File found", { name: file.name, type: file.type }));
                   }
                   event.preventDefault();
                   handleFileInsert(view, file);
@@ -222,18 +224,17 @@ export const InteractiveNode = Node.create<{
                 runClientUnscoped(clientLog("debug", "[InteractiveNode] handleDrop triggered", { fileCount: event.dataTransfer?.files.length }));
             }
 
-            const images = Array.from(event.dataTransfer.files).filter(
-              (file) => file.type.indexOf("image") === 0,
-            );
+            // ✅ MODIFIED: Accept all files, not just images
+            const files = Array.from(event.dataTransfer.files);
             
-            if (images.length > 0) {
+            if (files.length > 0) {
               event.preventDefault();
               const coordinates = view.posAtCoords({
                 left: event.clientX,
                 top: event.clientY,
               });
               if (coordinates) {
-                images.forEach((file) =>
+                files.forEach((file) =>
                   handleFileInsert(view, file, coordinates.pos),
                 );
               }

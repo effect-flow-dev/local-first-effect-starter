@@ -105,6 +105,15 @@ export const MapBlockFieldsSchema = Schema.Struct({
   style: Schema.optional(Schema.String),
 });
 
+// ✅ NEW: File Attachment Fields
+export const FileFieldsSchema = Schema.Struct({
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+  uploadId: Schema.optional(Schema.NullOr(Schema.String)),
+  filename: Schema.String,
+  size: Schema.Number,
+  mimeType: Schema.String,
+});
+
 // ... Tiptap Schema Definitions ...
 const TagMarkSchema = Schema.Struct({
   type: Schema.Literal("tagMark"),
@@ -186,7 +195,9 @@ const InteractiveBlockSchema = Schema.Struct({
         Schema.Literal("form_checklist"), 
         Schema.Literal("form_meter"), 
         Schema.Literal("map_block"),
-        Schema.Literal("tiptap_text")
+        Schema.Literal("tiptap_text"),
+        // ✅ NEW: Add file_attachment type
+        Schema.Literal("file_attachment")
     ),
     fields: Schema.Struct({
       is_complete: Schema.optional(Schema.Boolean), 
@@ -205,6 +216,10 @@ const InteractiveBlockSchema = Schema.Struct({
       zoom: Schema.optional(Schema.Number),
       style: Schema.optional(Schema.String),
       validation_status: Schema.optional(Schema.String), 
+      // ✅ NEW: File fields
+      filename: Schema.optional(Schema.String),
+      size: Schema.optional(Schema.Number),
+      mimeType: Schema.optional(Schema.String),
     }),
   }),
   content: Schema.optional(Schema.Array(TiptapTextNodeSchema)),
@@ -453,6 +468,13 @@ export const MapBlockSchema = Schema.Struct({
   fields: MapBlockFieldsSchema,
 });
 
+// ✅ NEW: File Block Schema
+export const FileBlockSchema = Schema.Struct({
+  ...BlockBase,
+  type: Schema.Literal("file_attachment"),
+  fields: FileFieldsSchema,
+});
+
 export const GenericBlockSchema = Schema.Struct({
   ...BlockBase,
   type: Schema.String,
@@ -464,6 +486,7 @@ export const BlockSchema = Schema.Union(
   FormChecklistBlockSchema,
   FormMeterBlockSchema,
   MapBlockSchema,
+  FileBlockSchema, // ✅ Added
   GenericBlockSchema
 );
 
@@ -517,6 +540,13 @@ const CreateImageBlockArgs = Schema.Struct({
   }),
 });
 
+// ✅ NEW: Create File Block Args
+const CreateFileBlockArgs = Schema.Struct({
+  ...CreateBlockBase,
+  type: Schema.Literal("file_attachment"),
+  fields: FileFieldsSchema,
+});
+
 const CreateTiptapTextBlockArgs = Schema.Struct({
   ...CreateBlockBase,
   type: Schema.Literal("tiptap_text"),
@@ -529,5 +559,6 @@ export const CreateBlockArgsSchema = Schema.Union(
   CreateMapBlockArgs,
   CreateTaskBlockArgs,
   CreateImageBlockArgs,
+  CreateFileBlockArgs, // ✅ Added
   CreateTiptapTextBlockArgs
 );

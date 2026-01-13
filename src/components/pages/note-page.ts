@@ -20,9 +20,12 @@ import { updateTabTitle } from "../../lib/client/stores/tabStore";
 import { type NotePageError } from "../../lib/client/errors";
 import { NoteTitleExistsError } from "../../lib/shared/errors";
 import { ReplicacheService } from "../../lib/client/replicache";
-import { HlcService } from "../../lib/client/hlc/HlcService"; // ✅ FIX: Standard Import
+import { HlcService } from "../../lib/client/hlc/HlcService"; 
 import { v4 as uuidv4 } from "uuid";
 import { getCurrentPosition } from "../../lib/client/geolocation";
+
+import { savePendingMedia, prewarmMemoryCache } from "../../lib/client/media/mediaStore";
+import { MediaSyncService } from "../../lib/client/media/MediaSyncService";
 
 import { sendFocus } from "../../lib/client/replicache/websocket";
 import { presenceState } from "../../lib/client/stores/presenceStore";
@@ -31,7 +34,9 @@ import "../ui/presence-indicator";
 import "../editor/tiptap-editor";
 import "../blocks/smart-checklist";
 import "../blocks/meter-input";
-import "../blocks/map-block"; 
+import "../blocks/map-block";
+import "../editor/node-views/file-attachment-node-view"; 
+import "../editor/node-views/image-block-node-view";     
 import "../ui/note-preview-card";
 import "../ui/dropdown-menu";
 import "../ui/confirm-dialog";
@@ -49,13 +54,13 @@ import {
     handleInput,
     handleEditorUpdate,
     handleForceSave,
-    handleBlockUpdateMethod, // ✅ FIX: Import Method
+    handleBlockUpdateMethod, 
 } from "./note-page.methods";
 import { localeState, t } from "../../lib/client/stores/i18nStore";
 import { openHistory } from "../../lib/client/stores/historyStore";
 import type { ChecklistItem } from "../blocks/smart-checklist";
+import { clientLog } from "../../lib/client/clientLog";
 
-// Typed Field Interfaces
 interface ChecklistFields { items: ChecklistItem[]; }
 interface MeterFields { 
     label: string; 
@@ -66,9 +71,19 @@ interface MeterFields {
     validation_status?: string; 
 }
 interface MapFields { zoom?: number; style?: string; }
-interface TiptapTextFields { content: TiptapDoc; }
+interface FileFields { 
+    url?: string; 
+    uploadId?: string; 
+    filename: string; 
+    size: number; 
+    mimeType: string; 
+}
+interface ImageFields {
+    url?: string;
+    uploadId?: string;
+    caption?: string;
+}
 
-// FIX: Aligned Interface
 interface UpdateTaskStatusEventDetail { blockId: BlockId; isComplete: boolean; version: number; }
 interface EditorUpdateEventDetail { content: TiptapDoc; }
 interface LinkHoverEventDetail { target: string; x: number; y: number; }
@@ -105,6 +120,7 @@ export class NotePage extends LitElement {
 
     private _handleForceSave = (e: Event) => {
         e.stopPropagation();
+        runClientUnscoped(clientLog("info", "[note-page] Received force-save event."));
         handleForceSave(this);
     };
 
@@ -159,7 +175,6 @@ export class NotePage extends LitElement {
             }
         }
 
-        // ✅ FIX: Corrected HLC injection logic
         runClientUnscoped(Effect.gen(function* () {
             const replicache = yield* ReplicacheService;
             const hlc = yield* HlcService;
@@ -178,11 +193,72 @@ export class NotePage extends LitElement {
         }));
     };
 
+    private _handleFileSelect = (e: Event) => {
+        const input = e.target as HTMLInputElement;
+        const file = input.files?.[0];
+        if (!file) return;
+
+        input.value = "";
+
+        const noteId = this.id as NoteId;
+        const blockId = uuidv4() as BlockId;
+        const uploadId = uuidv4();
+        
+        const blobUrl = URL.createObjectURL(file);
+        prewarmMemoryCache(uploadId, blobUrl);
+
+        runClientUnscoped(Effect.gen(function* () {
+            yield* clientLog("info", "[NotePage] Manual file upload started", { uploadId, type: file.type });
+            yield* savePendingMedia(uploadId, blockId, file);
+            const service = yield* MediaSyncService;
+            yield* service.queueUpload(uploadId);
+
+            const replicache = yield* ReplicacheService;
+            const hlc = yield* HlcService;
+            const location = yield* getCurrentPosition();
+
+            const hlcTimestamp = yield* hlc.getNextHlc();
+            const deviceTimestamp = new Date();
+
+            if (file.type.startsWith("image/")) {
+                yield* Effect.promise(() =>
+                    replicache.client.mutate.createBlock({
+                        noteId,
+                        blockId,
+                        type: "image",
+                        fields: { uploadId },
+                        latitude: location?.latitude,
+                        longitude: location?.longitude,
+                        hlcTimestamp,
+                        deviceTimestamp
+                    })
+                );
+            } else {
+                yield* Effect.promise(() =>
+                    replicache.client.mutate.createBlock({
+                        noteId,
+                        blockId,
+                        type: "file_attachment",
+                        fields: {
+                            uploadId,
+                            filename: file.name,
+                            size: file.size,
+                            mimeType: file.type || "application/octet-stream"
+                        },
+                        latitude: location?.latitude,
+                        longitude: location?.longitude,
+                        hlcTimestamp,
+                        deviceTimestamp
+                    })
+                );
+            }
+        }));
+    };
+
     private _handleAddBlock = (type: "tiptap_text" | "form_checklist" | "form_meter" | "map_block") => {
         const noteId = this.id as NoteId;
         const blockId = uuidv4() as BlockId;
 
-        // ✅ FIX: Context-aware effect block
         runClientUnscoped(Effect.gen(function* () {
             const location = yield* getCurrentPosition();
             const replicache = yield* ReplicacheService;
@@ -360,7 +436,6 @@ export class NotePage extends LitElement {
 
     private _renderBlock(block: AppBlock) {
         if (block.type === 'alert') {
-            // const fields = block.fields as { level?: string } | undefined;
             return html`
                 <div class="alert-block p-4 my-4 rounded-md bg-red-50 border-l-4 border-red-500 text-red-800 flex items-center justify-between" data-block-id="${block.id}">
                     <div class="flex items-center gap-3">
@@ -424,14 +499,45 @@ export class NotePage extends LitElement {
                     ></map-block>`;
                 break;
             }
+            // ✅ NEW: Handle File Attachment Block
+            case 'file_attachment': {
+                const fields = block.fields as FileFields;
+                content = html`
+                    <file-attachment-node-view
+                        .filename=${fields.filename}
+                        .size=${fields.size}
+                        .mimeType=${fields.mimeType}
+                        .url=${fields.url || ""}
+                        .uploadId=${fields.uploadId || ""}
+                    ></file-attachment-node-view>
+                `;
+                break;
+            }
+            // ✅ NEW: Handle Image Block
+            case 'image': {
+                const fields = block.fields as ImageFields;
+                content = html`
+                    <image-block-node-view
+                        .url=${fields.url || ""}
+                        .uploadId=${fields.uploadId || ""}
+                    ></image-block-node-view>
+                `;
+                break;
+            }
             case 'tiptap_text':
             default: {
-                const fields = block.fields as TiptapTextFields;
-                let initialDoc = null;
+                // ... (Existing Tiptap logic) ...
+                let initialDoc: object | null = null; // ✅ Explicit type to avoid implicit 'any'
                 
-                if (fields && fields.content) {
-                    initialDoc = fields.content;
-                } else {
+                if (block.content && block.content.trim().startsWith('{')) {
+                    try {
+                        initialDoc = JSON.parse(block.content) as object;
+                    } catch {
+                        initialDoc = null;
+                    }
+                }
+
+                if (!initialDoc) {
                     initialDoc = { 
                         type: "doc", 
                         content: [{ 
@@ -471,6 +577,7 @@ export class NotePage extends LitElement {
     }
 
     override render() {
+        // ... (Existing render) ...
         const s = this.state.value;
         const notebooks = notebookListState.value;
 
@@ -503,6 +610,13 @@ export class NotePage extends LitElement {
 
                 return html`
                   <history-sidebar></history-sidebar>
+                  
+                  <input 
+                    type="file" 
+                    id="hidden-file-input" 
+                    class="hidden" 
+                    @change=${this._handleFileSelect} 
+                  />
 
                   <div
                     class=${styles.container}
@@ -602,6 +716,11 @@ export class NotePage extends LitElement {
                                 <button class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50" @click=${() => this._handleAddBlock("map_block")}>
                                     <svg class="text-zinc-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></svg>
                                     <span>Map</span>
+                                </button>
+                                <!-- ✅ NEW: Upload Button -->
+                                <button class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 hover:bg-zinc-50" @click=${() => this.renderRoot.querySelector<HTMLInputElement>("#hidden-file-input")?.click()}>
+                                    <svg class="text-zinc-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                    <span>Upload File</span>
                                 </button>
                             </div>
                         </dropdown-menu>

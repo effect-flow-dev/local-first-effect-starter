@@ -11,6 +11,7 @@ export interface ContentNode {
     [key: string]: unknown;
   };
   content?: ContentNode[];
+  text?: string; // Added for text nodes
 }
 
 export function updateTaskInContent(content: ContentNode | undefined, blockId: string, isComplete: boolean): boolean {
@@ -42,7 +43,8 @@ export function updateBlockInContent(
     content: ContentNode | undefined, 
     blockId: string, 
     newFields: Record<string, unknown>,
-    validationWarning?: string 
+    validationWarning?: string,
+    newContentJson?: string // ✅ NEW: Accept content update string
 ): boolean {
   if (!content || !content.content || !Array.isArray(content.content)) return false;
   const nodes = content.content;
@@ -53,7 +55,7 @@ export function updateBlockInContent(
     
     // Recursive traversal
     if (node?.content && Array.isArray(node.content)) {
-      if (updateBlockInContent(node, blockId, newFields, validationWarning)) updated = true;
+      if (updateBlockInContent(node, blockId, newFields, validationWarning, newContentJson)) updated = true;
     }
 
     if (node?.attrs?.blockId === blockId) {
@@ -63,6 +65,32 @@ export function updateBlockInContent(
       
       if ('status' in newFields) {
         node.attrs.fields.is_complete = newFields.status === 'done';
+      }
+
+      // ✅ 1b. Apply Content Updates (Preserve Tree Consistency)
+      if (newContentJson) {
+          try {
+              const parsedDoc = JSON.parse(newContentJson) as ContentNode;
+              // If the update is a Doc, we extract its content to replace the node's content
+              // This assumes the TiptapEditor output (Doc) maps to the Block's internal structure
+              if (parsedDoc.type === 'doc' && Array.isArray(parsedDoc.content)) {
+                  // Special case: If the node is a paragraph/text block, we replace its content (text nodes)
+                  // with the content of the first paragraph in the doc, or the doc content itself?
+                  // TiptapEditor produces a doc. If our block is a 'paragraph', we want the doc's paragraph's content.
+                  
+                  // Flatten: Take the content of the update doc
+                  // But we must be careful not to nest paragraphs inside paragraphs if the node is already a paragraph.
+                  
+                  if (node.type === 'paragraph' && parsedDoc.content[0]?.type === 'paragraph') {
+                      node.content = parsedDoc.content[0].content;
+                  } else {
+                      // Fallback: just take the doc content
+                      node.content = parsedDoc.content;
+                  }
+              }
+          } catch (e) {
+              console.error(`[content-traversal] Failed to parse content update for block ${blockId}`, e);
+          }
       }
       
       // 2. Apply Validation Flag

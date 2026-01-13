@@ -2,7 +2,7 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Data, Effect } from "effect";
-import type { UserId } from "../shared/schemas"; // ✅ Fixed Import
+import type { UserId } from "../shared/schemas";
 import { config } from "./Config";
 import { generateUUID } from "./utils";
 
@@ -50,13 +50,23 @@ export const uploadAvatar = (
 export const uploadMedia = (
   userId: UserId,
   file: File,
+  options?: { filename?: string }
 ): Effect.Effect<string, S3UploadError> =>
   Effect.gen(function* () {
-    const ext = file.name.split(".").pop() || "bin";
+    const originalName = options?.filename || file.name || "file.bin";
+    
+    // Attempt to extract extension from the filename, fallback to bin
+    const parts = originalName.split(".");
+    const ext = parts.length > 1 ? parts.pop()?.toLowerCase() : "bin";
+    
     const uuid = yield* generateUUID();
     const key = `media/${userId}/${uuid}.${ext}`;
 
     const bodyStream = file.stream();
+
+    // Set Content-Disposition to inline; filename="example.pdf"
+    // This hints the browser to display it if possible, but provides the correct name on save.
+    const contentDisposition = `inline; filename="${originalName.replace(/"/g, '\\"')}"`;
 
     const upload = new Upload({
       client: s3Client,
@@ -64,7 +74,8 @@ export const uploadMedia = (
         Bucket: config.s3.bucketName,
         Key: key,
         Body: bodyStream,
-        ContentType: file.type,
+        ContentType: file.type || "application/octet-stream",
+        ContentDisposition: contentDisposition,
       },
     });
 
