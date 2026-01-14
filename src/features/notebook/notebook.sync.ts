@@ -8,11 +8,12 @@ import type { PullResponse, SyncFilter } from "../../lib/shared/replicache-schem
 import { NotebookDatabaseError } from "./Errors";
 
 export const notebookSyncHandler: SyncableEntity = {
+  // ✅ FIX: sinceVersion type updated
   getPatchOperations: (
     trx: Transaction<Database>,
     userId: UserId,
-    sinceVersion: number,
-    _filter?: SyncFilter, // Notebooks are usually global or we could filter by specific IDs
+    sinceVersion: string | number,
+    _filter?: SyncFilter, 
   ) =>
     Effect.gen(function* () {
       const patch: PullResponse["patch"] = [];
@@ -22,6 +23,7 @@ export const notebookSyncHandler: SyncableEntity = {
         .selectFrom("notebook")
         .selectAll()
         .where("user_id", "=", userId)
+        // ✅ FIX: Use String() for correct HLC comparison
         .where("global_version", ">", String(sinceVersion));
 
       const changedNotebooks = yield* Effect.tryPromise({
@@ -35,9 +37,8 @@ export const notebookSyncHandler: SyncableEntity = {
           key: `notebook/${nb.id}`,
           value: {
             _tag: "notebook",
-            // ✅ FIX: With the updated schemas.ts, NotebookId is consistent with DB type.
             id: nb.id,
-            user_id: nb.user_id as UserId,
+            user_id: nb.user_id,
             name: nb.name,
             created_at: nb.created_at.toISOString(),
             global_version: String(nb.global_version),

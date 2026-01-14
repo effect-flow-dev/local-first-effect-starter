@@ -14,13 +14,14 @@ export interface SyncableEntity {
    * 
    * @param trx The database transaction
    * @param userId The user requesting the sync
-   * @param sinceVersion The last global_version the client has seen
+   * @param sinceVersion The last global_version the client has seen. 
+   *                     ✅ FIX: Now supports string (HLC) or number (Legacy/Timestamp)
    * @param filter The active lens filter (optional)
    */
   readonly getPatchOperations: (
     trx: Transaction<Database>,
     userId: UserId,
-    sinceVersion: number,
-    filter?: SyncFilter, // ✅ NEW: Filter parameter
+    sinceVersion: string | number, // ✅ Changed from number
+    filter?: SyncFilter,
   ) => Effect.Effect<PullResponse["patch"], unknown>;
 }

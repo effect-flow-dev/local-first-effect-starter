@@ -49,7 +49,6 @@ export const handlePull = (
               currentGlobalVersion = await Effect.runPromise(getCurrentGlobalVersion(trx));
           } catch (e) {
               const err = e as { message?: string, code?: string };
-              // ✅ Robustness: Handle race condition where schema exists but tables don't yet
               if (err.code === "42P01" || (err.message?.includes("relation") && err.message?.includes("does not exist"))) {
                   console.warn(`[Pull] Tenant schema ${schemaName} not ready. Returning empty patch.`);
                   return {
@@ -62,8 +61,8 @@ export const handlePull = (
           }
 
           // HLC Comparison Logic
-          // "1736...:0001:USER" > "0" works lexicographically
-          if (requestCookie > currentGlobalVersion) {
+          if (String(requestCookie) > currentGlobalVersion) {
+              // Client is from the future (Time Travel)
               throw new ClientStateNotFoundError();
           }
 
@@ -88,15 +87,14 @@ export const handlePull = (
             clients.map((c) => [c.id, c.last_mutation_id]),
           );
 
-          // For delta queries, handlers expect a number (sinceVersion).
-          // We extract the physical timestamp part of the HLC for numeric comparisons.
-          const numericSince = typeof requestCookie === "number" 
-            ? requestCookie 
-            : parseInt(String(requestCookie).split(":")[0] || "0", 10);
+          // ✅ FIX: Pass the raw cookie (string or number) to sync handlers.
+          // This allows handlers to perform lexicographical comparison against stored HLC strings.
+          // e.g. "173...:0005" > "173...:0004" is true, avoiding re-sync.
+          const sinceVersion = requestCookie;
 
           const patchPromises = syncableEntities.map((entity) => 
             Effect.runPromise(
-              entity.getPatchOperations(trx, user.id, numericSince, filter)
+              entity.getPatchOperations(trx, user.id, sinceVersion, filter)
             )
           );
           

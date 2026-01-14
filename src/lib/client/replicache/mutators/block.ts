@@ -8,6 +8,8 @@ import {
     CreateBlockArgsSchema 
 } from "../../../shared/schemas"; 
 import type { TraversalNode, NoteStructure, BlockStructure } from "./types";
+import { clientLog } from "../../clientLog"; // ✅ For logging
+import { runClientUnscoped } from "../../runtime"; // ✅ For logging
 
 export interface SerializedBlock {
     id: BlockId;
@@ -387,4 +389,54 @@ export const incrementCounter = async (
             }
         }
     }
+};
+
+// ✅ ADDED: Client-side deleteBlock
+export const deleteBlock = async (
+    tx: WriteTransaction,
+    args: { blockId: BlockId; hlcTimestamp?: string; deviceTimestamp?: Date }
+) => {
+    runClientUnscoped(clientLog("info", `[Mutator:deleteBlock] Started for ${args.blockId}`));
+
+    // 1. Delete standalone block entry
+    await tx.del(`block/${args.blockId}`);
+
+    // 2. Scan notes to remove from content tree (if embedded)
+    // This handles both Tiptap editor content and interactiveBlock wrappers
+    const notes = await tx.scan({ prefix: "note/" }).values().toArray();
+    let updatedCount = 0;
+    
+    for (const noteJson of notes) {
+        const note = noteJson as unknown as NoteStructure;
+        
+        if (note.content && Array.isArray(note.content.content)) {
+             // Clone before mutate
+             const clonedNote = JSON.parse(JSON.stringify(note)) as NoteStructure;
+             let changed = false;
+
+             const removeNode = (nodes: TraversalNode[]) => {
+                 for (let i = 0; i < nodes.length; i++) {
+                     const node = nodes[i];
+                     if (node?.attrs?.blockId === args.blockId) {
+                         nodes.splice(i, 1);
+                         changed = true;
+                         i--; // Adjust index after splice
+                     } else if (node?.content && Array.isArray(node.content)) {
+                         removeNode(node.content);
+                     }
+                 }
+             };
+             
+             removeNode(clonedNote.content!.content!);
+             
+             if (changed) {
+                 clonedNote.version = (clonedNote.version || 0) + 1;
+                 clonedNote.updated_at = new Date().toISOString();
+                 await tx.set(`note/${note.id}`, clonedNote as unknown as ReadonlyJSONValue);
+                 updatedCount++;
+             }
+        }
+    }
+    
+    runClientUnscoped(clientLog("info", `[Mutator:deleteBlock] Completed. Removed from ${updatedCount} notes.`));
 };

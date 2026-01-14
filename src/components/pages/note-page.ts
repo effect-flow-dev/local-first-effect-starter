@@ -193,6 +193,41 @@ export class NotePage extends LitElement {
         }));
     };
 
+    // ✅ NEW: Handle Block Deletion
+    private _handleBlockDelete = (e: Event) => {
+        e.stopPropagation();
+        
+        runClientUnscoped(clientLog("info", "[NotePage] _handleBlockDelete called", e));
+
+        // Find the wrapper element to get the block ID
+        const target = e.target as HTMLElement;
+        const wrapper = target.closest('[data-block-id]');
+        
+        if (wrapper) {
+            const blockId = wrapper.getAttribute('data-block-id') as BlockId;
+            runClientUnscoped(clientLog("debug", `[NotePage] Found block wrapper: ${blockId}`));
+            
+            if (blockId) {
+                runClientUnscoped(Effect.gen(function* () {
+                     const replicache = yield* ReplicacheService;
+                     const hlc = yield* HlcService;
+                     const hlcTimestamp = yield* hlc.getNextHlc();
+                     const deviceTimestamp = new Date();
+                     
+                     yield* clientLog("info", `[NotePage] Executing mutate.deleteBlock for ${blockId}`);
+
+                     yield* Effect.promise(() => replicache.client.mutate.deleteBlock({
+                         blockId,
+                         hlcTimestamp,
+                         deviceTimestamp
+                     }));
+                }));
+            }
+        } else {
+             runClientUnscoped(clientLog("warn", "[NotePage] _handleBlockDelete: Wrapper with data-block-id not found", target));
+        }
+    };
+
     private _handleFileSelect = (e: Event) => {
         const input = e.target as HTMLInputElement;
         const file = input.files?.[0];
@@ -260,7 +295,6 @@ export class NotePage extends LitElement {
         const blockId = uuidv4() as BlockId;
 
         runClientUnscoped(Effect.gen(function* () {
-            // ✅ DEBUG LOG
             yield* clientLog("info", `[NotePage] Adding block of type ${type}...`);
             
             const location = yield* getCurrentPosition();
@@ -529,8 +563,7 @@ export class NotePage extends LitElement {
             }
             case 'tiptap_text':
             default: {
-                // ... (Existing Tiptap logic) ...
-                let initialDoc: object | null = null; // ✅ Explicit type to avoid implicit 'any'
+                let initialDoc: object | null = null;
                 
                 if (block.content && block.content.trim().startsWith('{')) {
                     try {
@@ -541,11 +574,18 @@ export class NotePage extends LitElement {
                 }
 
                 if (!initialDoc) {
+                    // ✅ FIX: Construct valid initial doc.
+                    // If content is empty string, create an EMPTY array for paragraph content.
+                    // ProseMirror/Tiptap throws RangeError if you pass { text: "" }.
+                    const paragraphContent = block.content ? [{ type: "text", text: block.content }] : [];
+                    
                     initialDoc = { 
                         type: "doc", 
                         content: [{ 
-                            type: "paragraph", 
-                            content: [{ type: "text", text: block.content || "" }] 
+                            type: "paragraph",
+                            // ✅ FIX: Inject blockId into attributes for StableId to prevent "Generated new ID" logs
+                            attrs: { blockId: block.id, version: block.version },
+                            content: paragraphContent 
                         }] 
                     };
                 }
@@ -575,12 +615,22 @@ export class NotePage extends LitElement {
                     <presence-indicator .blockId=${block.id}></presence-indicator>
                 </div>
                 ${content}
+                
+                <!-- ✅ ADDED: Delete Button visible on hover -->
+                <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                     <button
+                        class="p-1 rounded bg-white border border-zinc-200 text-zinc-400 hover:text-red-500 hover:border-red-200 shadow-sm"
+                        @click=${this._handleBlockDelete}
+                        title="Delete Block"
+                     >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                     </button>
+                </div>
             </div>
         `;
     }
 
     override render() {
-        // ... (Existing render) ...
         const s = this.state.value;
         const notebooks = notebookListState.value;
 
@@ -626,7 +676,8 @@ export class NotePage extends LitElement {
                     @force-save=${this._handleForceSave}
                     @update-block=${this._handleBlockUpdate}
                     @increment-block=${this._handleIncrementBlock}
-                    @focusin=${this._handleBlockFocusIn} 
+                    @focusin=${this._handleBlockFocusIn}
+                    @delete-block=${this._handleBlockDelete} 
                   >
                     <div class=${styles.editor}>
                       <div class=${styles.header}>

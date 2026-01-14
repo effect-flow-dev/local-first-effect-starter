@@ -41,15 +41,16 @@ export const ReplicacheLive = (user: PublicUser) => {
         mutators,
         indexes: {
           blocksByNoteId: { jsonPointer: "/note_id", allowEmpty: true },
-          imagesByUrl: { prefix: "block/", jsonPointer: "/fields/url" },
-          blocksByGeo: { prefix: "block/", jsonPointer: "/latitude" },
+          // ✅ FIX: Allow empty values to prevent "Not indexing value" errors for non-matching blocks
+          imagesByUrl: { prefix: "block/", jsonPointer: "/fields/url", allowEmpty: true },
+          blocksByGeo: { prefix: "block/", jsonPointer: "/latitude", allowEmpty: true },
         },
         pullInterval: 5000,
       });
 
       client.onSync = (isSyncing: boolean) => { setSyncing(isSyncing); };
 
-      // ✅ FIX: Lowered polling interval to 100ms for more accurate "Saved" detection in E2E tests
+      // Polling for pending mutations
       const monitorEffect = Effect.gen(function* () {
           try {
             const pending = yield* Effect.tryPromise({

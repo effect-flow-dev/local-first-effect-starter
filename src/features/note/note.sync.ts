@@ -10,7 +10,8 @@ import type { PullResponse, SyncFilter } from "../../lib/shared/replicache-schem
 import { NoteDatabaseError } from "./Errors";
 
 export const noteSyncHandler: SyncableEntity = {
-  getPatchOperations: (trx: Transaction<Database>, userId: UserId, sinceVersion: number, filter?: SyncFilter) =>
+  // ✅ FIX: sinceVersion type updated to string | number
+  getPatchOperations: (trx: Transaction<Database>, userId: UserId, sinceVersion: string | number, filter?: SyncFilter) =>
     Effect.gen(function* () {
       const patch: PullResponse["patch"] = [];
 
@@ -19,16 +20,16 @@ export const noteSyncHandler: SyncableEntity = {
         .selectFrom("note")
         .selectAll()
         .where("user_id", "=", userId)
+        // ✅ FIX: Use String() to ensure we compare against the text column in DB.
+        // HLC strings like "173...:0001:ID" sort correctly lexicographically against other HLC strings.
         .where("global_version", ">", String(sinceVersion));
 
-      // ✅ Apply "The Lens": Only sync notes that contain matching blocks
       if (filter?.tags && filter.tags.length > 0) {
         query = query.where((eb) =>
           eb.exists(
             eb.selectFrom("block")
               .select("block.id")
               .whereRef("block.note_id", "=", "note.id")
-              // ✅ FIX: Explicitly cast array parameter for Postgres && operator
               .where("block.tags", "&&", sql<string[]>`${filter.tags}`)
           )
         );
@@ -52,15 +53,13 @@ export const noteSyncHandler: SyncableEntity = {
             value: {
               _tag: "note",
               id: note.id,
-              user_id: note.user_id as UserId,
+              user_id: note.user_id,
               title: `${note.title} (Sync Error)`,
               content: { type: "doc", content: [] },
               version: note.version,
               created_at: note.created_at.toISOString(),
               updated_at: note.updated_at.toISOString(),
-              // ✅ FIX: Explicitly include global_version to satisfy schema validation on client
               global_version: String(note.global_version),
-              // ✅ FIX: Include notebook_id
               notebook_id: note.notebook_id,
             },
           });
@@ -73,15 +72,13 @@ export const noteSyncHandler: SyncableEntity = {
           value: {
             _tag: "note",
             id: note.id,
-            user_id: note.user_id as UserId,
+            user_id: note.user_id,
             title: note.title,
             content: decodeResult.right,
             version: note.version,
             created_at: note.created_at.toISOString(),
             updated_at: note.updated_at.toISOString(),
-            // ✅ FIX: Explicitly include global_version
             global_version: String(note.global_version),
-            // ✅ FIX: Include notebook_id so client doesn't move note to Inbox
             notebook_id: note.notebook_id,
           },
         });

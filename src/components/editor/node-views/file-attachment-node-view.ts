@@ -1,4 +1,4 @@
-// FILE: src/components/editor/node-views/file-attachment-node-view.ts
+// File: ./src/components/editor/node-views/file-attachment-node-view.ts
 import { LitElement, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { Effect, Fiber, Schedule } from "effect";
@@ -11,6 +11,7 @@ import { MediaSyncService } from "../../../lib/client/media/MediaSyncService";
 import type { PendingUpload } from "../../../lib/client/media/types";
 import { runClientUnscoped } from "../../../lib/client/runtime";
 import { clientLog } from "../../../lib/client/clientLog";
+import "../../ui/confirm-dialog"; // ✅ Import ConfirmDialog
 
 const formatBytes = (bytes: number, decimals = 1) => {
   if (!+bytes) return "0 Bytes";
@@ -32,6 +33,7 @@ export class FileAttachmentNodeView extends LitElement {
   @state() private _uploadStatus: PendingUpload | null = null;
   @state() private _isOfflineCached = false;
   @state() private _localBlobUrl: string | null = null;
+  @state() private _isDeleteModalOpen = false; // ✅ Delete state
 
   private _pollFiber: Fiber.RuntimeFiber<void, unknown> | null = null;
 
@@ -175,6 +177,30 @@ export class FileAttachmentNodeView extends LitElement {
       }
   };
 
+  // ✅ Delete Handlers
+  private _openDeleteModal = (e: Event) => {
+    e.stopPropagation();
+    runClientUnscoped(clientLog("debug", "[FileAttachment] Delete trash icon clicked"));
+    this._isDeleteModalOpen = true;
+  };
+
+  private _confirmDelete = () => {
+    runClientUnscoped(clientLog("info", "[FileAttachment] Confirming delete in modal..."));
+    this._isDeleteModalOpen = false;
+    
+    const event = new CustomEvent("delete-block", {
+      bubbles: true,
+      composed: true,
+    });
+    
+    this.dispatchEvent(event);
+    runClientUnscoped(clientLog("info", "[FileAttachment] Dispatched 'delete-block' event"));
+  };
+
+  private _cancelDelete = () => {
+    this._isDeleteModalOpen = false;
+  };
+
   private _getFileIcon() {
     const type = this.mimeType;
     if (type.includes("pdf")) {
@@ -242,7 +268,7 @@ export class FileAttachmentNodeView extends LitElement {
                             href="${downloadLink}" 
                             download="${this.filename}" 
                             target="_blank"
-                            class="p-1.5 rounded-full hover:bg-zinc-100 text-zinc-500 transition-colors ${!isDone && !this._localBlobUrl ? 'opacity-50 pointer-events-none' : ''}"
+                            class="p-1.5 rounded-full hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors ${!isDone && !this._localBlobUrl ? 'opacity-50 pointer-events-none' : ''}"
                             title="Download"
                             @click=${this._handleDownload}
                         >
@@ -250,6 +276,15 @@ export class FileAttachmentNodeView extends LitElement {
                         </a>`
                     : nothing
                 }
+
+                <!-- ✅ DELETE BUTTON -->
+                <button 
+                  @click=${this._openDeleteModal} 
+                  class="p-1.5 rounded-full hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                  title="Delete File"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                </button>
             </div>
         </div>
         
@@ -257,6 +292,16 @@ export class FileAttachmentNodeView extends LitElement {
             ? html`<div class="mt-1 text-xs text-red-600 px-1">${this._uploadStatus.lastError}</div>` 
             : nothing
         }
+
+        <confirm-dialog
+          .open=${this._isDeleteModalOpen}
+          heading="Delete File"
+          description="Are you sure you want to delete this file? This cannot be undone."
+          confirmText="Delete"
+          cancelText="Cancel"
+          @confirm=${this._confirmDelete}
+          @cancel=${this._cancelDelete}
+        ></confirm-dialog>
       </div>
     `;
   }
