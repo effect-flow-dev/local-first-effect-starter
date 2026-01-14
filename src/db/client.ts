@@ -1,4 +1,4 @@
-// FILE: src/db/client.ts
+// File: src/db/client.ts
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
 import type { Database } from "../types";
@@ -8,6 +8,10 @@ import { getTenantConnection } from "./connection-manager";
 interface PgError {
   code?: string;
 }
+
+// Lazy initialization variables
+let _pool: Pool | undefined;
+let _centralDb: Kysely<Database> | undefined;
 
 const getConnectionString = () => {
   const useLocalProxy = process.env.USE_LOCAL_NEON_PROXY === "true";
@@ -23,31 +27,78 @@ const getConnectionString = () => {
   return connectionString;
 };
 
-// Singleton connection pool for Central DB (and Schema-based tenants)
-export const pool = new Pool({
-  connectionString: getConnectionString(),
-  connectionTimeoutMillis: 5000,
-});
+const initPool = () => {
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: getConnectionString(),
+      connectionTimeoutMillis: 5000,
+    });
+  }
+  return _pool;
+};
 
-const dialect = new PostgresDialect({ pool });
+const initCentralDb = () => {
+  if (!_centralDb) {
+    const dialect = new PostgresDialect({ pool: initPool() });
+    _centralDb = new Kysely<Database>({
+      dialect,
+      log: (event) => {
+        if (event.level === "error") {
+          const error = event.error as PgError;
+          // Ignore "database already exists" (42P04) during provisioning
+          if (error?.code === "42P04") return;
+          
+          // Ignore "relation does not exist" (42P01) 
+          // This happens when AlertWorker scans a tenant whose schema is being created/deleted.
+          if (error?.code === "42P01") return;
+
+          console.error("[DB Error]", event.error);
+        }
+      },
+    });
+  }
+  return _centralDb;
+};
+
+// Singleton connection pool for Central DB (and Schema-based tenants)
+// Exported as a Proxy to allow lazy initialization (important for testing isolation)
+export const pool = new Proxy({} as Pool, {
+  get(_target, prop) {
+    const p = initPool();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const value = (p as any)[prop];
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+    return typeof value === 'function' ? value.bind(p) : value;
+  }
+});
 
 // --- Central Database Instance ---
-export const centralDb = new Kysely<Database>({
-  dialect,
-  log: (event) => {
-    if (event.level === "error") {
-      const error = event.error as PgError;
-      // Ignore "database already exists" (42P04) during provisioning
-      if (error?.code === "42P04") return;
-      
-      // ✅ FIX: Ignore "relation does not exist" (42P01) 
-      // This happens when AlertWorker scans a tenant whose schema is being created/deleted.
-      if (error?.code === "42P01") return;
-
-      console.error("[DB Error]", event.error);
-    }
-  },
+// Exported as a Proxy so that 'process.env.DATABASE_URL' is read only when the DB is first used.
+// This allows test runners to override the URL in 'beforeAll' hooks.
+export const centralDb = new Proxy({} as Kysely<Database>, {
+  get(_target, prop) {
+    const db = initCentralDb();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const value = (db as any)[prop];
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+    return typeof value === 'function' ? value.bind(db) : value;
+  }
 });
+
+/**
+ * Gracefully closes the central database connection pool.
+ * Used during test teardown to prevent "terminating connection" errors.
+ */
+export const closeCentralDb = async () => {
+  if (_centralDb) {
+    await _centralDb.destroy();
+    _centralDb = undefined;
+    _pool = undefined;
+  } else if (_pool) {
+    await _pool.end();
+    _pool = undefined;
+  }
+};
 
 /**
  * Tenant Configuration Interface
@@ -56,11 +107,10 @@ export interface TenantConfig {
   id: string; // Tenant ID
   tenant_strategy: "schema" | "database";
   database_name: string | null;
-  schema_name?: string | null; // ✅ Added support for explicit schema naming
+  schema_name?: string | null;
 }
 
 // Deprecated: Use getTenantDb instead.
-// Kept temporarily if any legacy tests rely on it, but internal logic should shift.
 export { getUserDb as getTenantDb };
 
 /**
@@ -80,9 +130,8 @@ export const getUserDb = (tenant: TenantConfig): Kysely<Database> => {
   }
 
   // Strategy: Schema (Default)
-  // Uses the explicitly stored schema_name (e.g. "user_123" or "tenant_456")
-  // Falls back to "tenant_{id}" if missing.
   const schema = tenant.schema_name || `tenant_${tenant.id}`;
   
+  // Use centralDb (which is a Proxy) to create a schema-scoped query builder
   return centralDb.withSchema(schema);
 };

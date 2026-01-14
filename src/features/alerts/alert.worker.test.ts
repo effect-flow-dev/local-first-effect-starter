@@ -1,15 +1,18 @@
-// FILE: src/features/alerts/alert.worker.test.ts
+// File: ./src/features/alerts/alert.worker.test.ts
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { Effect } from "effect";
 import { scanAndAlert } from "./alert.worker";
 import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
 import { randomUUID } from "node:crypto";
 import type { UserId, NoteId, BlockId } from "../../lib/shared/schemas";
-// ✅ FIX: Import Branded Types for DB Inserts
 import type { TaskId } from "../../types/generated/tenant/tenant_template/Task";
 import type { PushSubscriptionId } from "../../types/generated/tenant/tenant_template/PushSubscription";
+import type { TenantId } from "../../types/generated/central/public/Tenant";
+import type { ConsultancyId } from "../../types/generated/central/public/Consultancy";
 import type { Kysely } from "kysely";
 import type { Database } from "../../types";
+// Import centralDb to seed the tenant record
+import { centralDb } from "../../db/client";
 
 const TEST_HLC = "1736612345000:0001:TEST";
 
@@ -22,40 +25,12 @@ vi.mock("../../lib/server/push", () => ({
   sendPushNotification: mockSendPushNotification,
 }));
 
-// Mock centralDb
-const { mockCentralDb, mockExecute } = vi.hoisted(() => {
-  const mockExecute = vi.fn();
-  return {
-    mockCentralDb: {
-      selectFrom: vi.fn(() => ({
-        selectAll: vi.fn().mockReturnThis(),
-        execute: mockExecute,
-      })),
-    },
-    mockExecute,
-  };
-});
-
-// ✅ FIX: Define a minimal interface for the global mock injection
-interface GlobalWithTestDb {
-    testDbInstance?: Kysely<Database>;
-}
-
-vi.mock("../../db/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../db/client")>();
-  return {
-    ...actual,
-    centralDb: mockCentralDb,
-    // Mock getTenantDb to return our test database instance using safe cast
-    getTenantDb: () => (globalThis as unknown as GlobalWithTestDb).testDbInstance!,
-  };
-});
-
 describe("Alert Worker (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
   let userId: UserId;
-  let tenantId: string;
+  let tenantId: TenantId;
+  let consultancyId: ConsultancyId;
 
   afterAll(async () => {
     await closeTestDb();
@@ -64,30 +39,44 @@ describe("Alert Worker (Integration)", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     userId = randomUUID() as UserId;
-    tenantId = randomUUID();
+    tenantId = randomUUID() as TenantId;
+    consultancyId = randomUUID() as ConsultancyId;
 
-    // 1. Setup isolated test DB
+    // 1. Setup isolated test DB schema for the user
     const setup = await createTestUserSchema(userId);
     db = setup.db;
     cleanup = setup.cleanup;
-    
-    // ✅ FIX: Use typed global property injection
-    (globalThis as unknown as GlobalWithTestDb).testDbInstance = db;
 
-    // 2. Mock Central DB Response via the hoisted mock function
-    mockExecute.mockResolvedValue([
-      {
+    // 2. Seed Consultancy (Required for Foreign Key constraint on Tenant)
+    await centralDb
+      .insertInto("consultancy")
+      .values({
+        id: consultancyId,
+        name: "Test Consultancy",
+        created_at: new Date(),
+      })
+      .execute();
+
+    // 3. Seed the Tenant record in the Central DB (public schema)
+    await centralDb
+      .insertInto("tenant")
+      .values({
         id: tenantId,
+        name: "Test Tenant",
+        subdomain: `test-${tenantId}`,
+        consultancy_id: consultancyId,
         tenant_strategy: "schema",
-        schema_name: setup.schemaName, 
+        schema_name: setup.schemaName,
         database_name: null,
-      },
-    ]);
+        created_at: new Date(),
+      })
+      .execute();
 
     return async () => {
       await cleanup();
-      // ✅ FIX: Cleanup typed global property
-      delete (globalThis as unknown as GlobalWithTestDb).testDbInstance;
+      // Cleanup both records
+      await centralDb.deleteFrom("tenant").where("id", "=", tenantId).execute();
+      await centralDb.deleteFrom("consultancy").where("id", "=", consultancyId).execute();
     };
   });
 
@@ -106,7 +95,6 @@ describe("Alert Worker (Integration)", () => {
             version: 1,
             created_at: new Date(),
             updated_at: new Date(),
-            // ✅ FIXED: Missing global_version
             global_version: TEST_HLC
           })
           .execute()
@@ -130,7 +118,6 @@ describe("Alert Worker (Integration)", () => {
             version: 1,
             created_at: new Date(),
             updated_at: new Date(),
-            // ✅ FIXED: Missing global_version
             global_version: TEST_HLC
           })
           .execute()
@@ -138,7 +125,6 @@ describe("Alert Worker (Integration)", () => {
 
       yield* Effect.promise(() =>
         db.insertInto("task")
-          // ✅ FIX: Use Branded Type ID to avoid 'any' cast
           .values({
             id: randomUUID() as TaskId,
             user_id: userId,
@@ -149,7 +135,6 @@ describe("Alert Worker (Integration)", () => {
             alert_sent_at: opts.alertSent ? new Date() : null,
             created_at: new Date(),
             updated_at: new Date(),
-            // ✅ FIXED: Missing global_version
             global_version: TEST_HLC
           })
           .execute()
@@ -157,7 +142,6 @@ describe("Alert Worker (Integration)", () => {
 
       yield* Effect.promise(() =>
         db.insertInto("push_subscription")
-          // ✅ FIX: Use Branded Type ID to avoid 'any' cast
           .values({
             id: randomUUID() as PushSubscriptionId,
             user_id: userId,
@@ -178,6 +162,7 @@ describe("Alert Worker (Integration)", () => {
         
         yield* seedTask({ dueAt: pastDate, isComplete: false, alertSent: false });
 
+        // Run the worker logic
         yield* scanAndAlert;
 
         expect(mockSendPushNotification).toHaveBeenCalledTimes(1);
