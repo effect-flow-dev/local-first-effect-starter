@@ -41,7 +41,9 @@ export class HlcService extends Context.Tag("HlcService")<
   IHlcService
 >() {}
 
-const DB_NAME = "life-io-db";
+// ✅ FIX: Use a unique, versioned database name to ensure the object store is created.
+// idb-keyval does not automatically bump DB versions if an existing DB is found without the store.
+const DB_NAME = "life-io-hlc-v1";
 const STORE_NAME = "hlc-store";
 const hlcIdbStore = createStore(DB_NAME, STORE_NAME);
 const HLC_STORAGE_KEY = "current_hlc";
