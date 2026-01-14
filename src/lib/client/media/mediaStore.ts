@@ -53,6 +53,7 @@ export const savePendingMedia = (id: string, blockId: string, file: File) =>
       retryCount: 0,
       lastAttemptAt: null,
       lastError: null,
+      lastAccessedAt: Date.now(), // ✅ Init TTL
     };
 
     yield* Effect.tryPromise({
@@ -74,7 +75,13 @@ export const getPendingMedia = (id: string) =>
   Effect.tryPromise({
     try: async () => {
       const item = await get<PendingUpload>(id, mediaStore);
-      return item || null;
+      if (!item) return null;
+      
+      // ✅ Lazy Migration: If legacy record, add lastAccessedAt
+      if (typeof item.lastAccessedAt !== 'number') {
+          return { ...item, lastAccessedAt: Date.now() };
+      }
+      return item;
     },
     catch: (cause) => new MediaStorageError({ operation: "get", cause }),
   });
@@ -98,7 +105,11 @@ export const updateMediaStatus = (id: string, status: UploadStatus) =>
       );
       return;
     }
-    const updated: PendingUpload = { ...item, status };
+    const updated: PendingUpload = { 
+        ...item, 
+        status,
+        lastAccessedAt: Date.now() // Updating status counts as access
+    };
     yield* Effect.tryPromise({
       try: () => set(id, updated, mediaStore),
       catch: (cause) =>
@@ -122,6 +133,7 @@ export const incrementRetry = (id: string, errorMsg?: string) =>
       retryCount: item.retryCount + 1,
       lastAttemptAt: Date.now(),
       lastError: errorMsg || null,
+      lastAccessedAt: Date.now(),
     };
 
     yield* Effect.tryPromise({
@@ -141,5 +153,49 @@ export const getAllPendingMedia = () =>
       try: () => getMany<PendingUpload>(allKeys, mediaStore),
       catch: (cause) => new MediaStorageError({ operation: "getMany", cause }),
     });
-    return items.filter((i): i is PendingUpload => i !== undefined);
+    
+    // Filter and migrate on read
+    return items
+        .filter((i): i is PendingUpload => i !== undefined)
+        .map(i => {
+            if (typeof i.lastAccessedAt !== 'number') {
+                return { ...i, lastAccessedAt: Date.now() };
+            }
+            return i;
+        });
   });
+
+/**
+ * Updates the lastAccessedAt timestamp for a media item.
+ * Used to keep "hot" items from being garbage collected.
+ */
+export const touchMedia = (id: string) =>
+    Effect.gen(function* () {
+        const item = yield* getPendingMedia(id);
+        if (!item) return;
+
+        // Optimization: Don't write if accessed recently (e.g. within 1 minute)
+        // to avoid thrashing IDB on scroll
+        if (Date.now() - item.lastAccessedAt < 60000) return;
+
+        const updated: PendingUpload = { ...item, lastAccessedAt: Date.now() };
+        
+        yield* Effect.tryPromise({
+            try: () => set(id, updated, mediaStore),
+            catch: (cause) => new MediaStorageError({ operation: "touch", cause }),
+        });
+    });
+
+/**
+ * Scans for media items that are synced (safe to delete) and older than the threshold.
+ */
+export const getExpiredMedia = (thresholdMs: number) =>
+    Effect.gen(function* () {
+        const allItems = yield* getAllPendingMedia();
+        const now = Date.now();
+        
+        return allItems.filter(item => 
+            item.status === 'synced' && 
+            (now - item.lastAccessedAt) > thresholdMs
+        );
+    });

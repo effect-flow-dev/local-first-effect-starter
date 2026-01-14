@@ -1,5 +1,5 @@
 // FILE: src/lib/client/media/types.ts
-export type UploadStatus = "pending" | "uploading" | "error" | "uploaded";
+export type UploadStatus = "pending" | "uploading" | "error" | "uploaded" | "synced";
 
 export interface PendingUpload {
   readonly id: string; // The uploadId (key in IDB)
@@ -11,4 +11,5 @@ export interface PendingUpload {
   readonly retryCount: number;
   readonly lastAttemptAt: number | null; // ✅ Timestamp of last try
   readonly lastError: string | null;     // ✅ Message of last error
+  readonly lastAccessedAt: number;       // ✅ Timestamp of last read/write for GC
 }

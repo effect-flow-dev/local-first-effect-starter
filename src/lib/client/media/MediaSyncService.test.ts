@@ -89,6 +89,7 @@ describe("MediaSyncService Integration", () => {
         retryCount: 0,
         lastAttemptAt: null,
         lastError: null,
+        lastAccessedAt: Date.now(),
       }),
     );
 
@@ -111,7 +112,6 @@ describe("MediaSyncService Integration", () => {
         yield* Effect.yieldNow();
 
         // Advance time past the 1500ms sleep in 'processUpload'
-        // Since we provided TestContext to the layer, this adjusts the service's clock
         yield* TestClock.adjust("2 seconds");
         
         // Yield again to let the service execute the logic after waking up
@@ -125,14 +125,16 @@ describe("MediaSyncService Integration", () => {
     // 4. Assertions
     expect(mediaStore.updateMediaStatus).toHaveBeenCalledWith(uploadId, "uploading");
     expect(mediaStore.updateMediaStatus).not.toHaveBeenCalledWith(uploadId, "error");
+    // Should NOT remove because it failed transiently
     expect(mediaStore.removePendingMedia).not.toHaveBeenCalled();
     expect(mediaStore.incrementRetry).toHaveBeenCalled();
   });
 
-  it("Test 2 (Resume): Picks up pending uploads from IDB on initialization", async () => {
+  it("Test 2 (Resume): Picks up pending uploads from IDB on initialization, ignoring 'synced'", async () => {
     const pendingId = "upload-resume";
+    const syncedId = "upload-done";
 
-    // 1. Setup IDB with existing pending item (for the resume scan)
+    // 1. Setup IDB with mixed items
     vi.mocked(mediaStore.getAllPendingMedia).mockReturnValue(
       Effect.succeed([
         {
@@ -145,34 +147,46 @@ describe("MediaSyncService Integration", () => {
           retryCount: 0,
           lastAttemptAt: null,
           lastError: null,
+          lastAccessedAt: Date.now(),
         },
+        {
+          id: syncedId,
+          blockId: "b2",
+          file: new File([""], "done.png"),
+          status: "synced", // ✅ Should be ignored
+          mimeType: "image/png",
+          createdAt: Date.now(),
+          retryCount: 0,
+          lastAttemptAt: null,
+          lastError: null,
+          lastAccessedAt: Date.now(),
+        }
       ]),
     );
 
     // Setup retrieval for the processing step
-    vi.mocked(mediaStore.getPendingMedia).mockReturnValue(
-      Effect.succeed({
-        id: pendingId,
-        blockId: "b1",
-        file: new File([""], "resume.png"),
-        status: "pending",
-        mimeType: "image/png",
-        createdAt: Date.now(),
-        retryCount: 0,
-        lastAttemptAt: null,
-        lastError: null,
-      })
-    );
+    vi.mocked(mediaStore.getPendingMedia).mockImplementation((id) => {
+        if (id === pendingId) {
+            return Effect.succeed({
+                id: pendingId,
+                blockId: "b1",
+                file: new File([""], "resume.png"),
+                status: "pending",
+                mimeType: "image/png",
+                createdAt: Date.now(),
+                retryCount: 0,
+                lastAttemptAt: null,
+                lastError: null,
+                lastAccessedAt: Date.now(),
+            });
+        }
+        return Effect.succeed(null);
+    });
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        // Just accessing the service triggers the Layer initialization
         yield* MediaSyncService;
-
-        // Allow the 'resumePending' fiber to fork and run
         yield* Effect.yieldNow();
-
-        // Advance past startup delay
         yield* TestClock.adjust("2 seconds");
         yield* Effect.yieldNow();
       }).pipe(
@@ -183,9 +197,14 @@ describe("MediaSyncService Integration", () => {
 
     // 3. Assertions
     expect(mediaStore.getAllPendingMedia).toHaveBeenCalled();
+    // Should only attempt to get/process the 'pending' item
     expect(mediaStore.getPendingMedia).toHaveBeenCalledWith(pendingId);
-    expect(api.api.media.upload.post).toHaveBeenCalled();
-    expect(mediaStore.removePendingMedia).toHaveBeenCalledWith(pendingId);
+    expect(mediaStore.getPendingMedia).not.toHaveBeenCalledWith(syncedId);
+    expect(api.api.media.upload.post).toHaveBeenCalledTimes(1);
+    
+    // ✅ MODIFIED EXPECTATION: Should mark as synced, NOT remove
+    expect(mediaStore.updateMediaStatus).toHaveBeenCalledWith(pendingId, "synced");
+    expect(mediaStore.removePendingMedia).not.toHaveBeenCalled();
   });
 
   it("Test 3 (Fatal Stop): 413 error marks item as Error and stops retrying", async () => {
@@ -203,6 +222,7 @@ describe("MediaSyncService Integration", () => {
         retryCount: 0,
         lastAttemptAt: null,
         lastError: null,
+        lastAccessedAt: Date.now(),
       }),
     );
 

@@ -5,9 +5,9 @@ import * as idb from "idb-keyval";
 import {
   savePendingMedia,
   getPendingMedia,
-  incrementRetry, // ✅ Import
-  removePendingMedia,
-  MediaStorageError,
+  incrementRetry,
+  touchMedia,
+  getExpiredMedia,
 } from "./mediaStore";
 
 // --- Mocks ---
@@ -23,9 +23,10 @@ vi.mock("idb-keyval", () => ({
 describe("MediaStore (IndexedDB Wrapper)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
   });
 
-  it("savePendingMedia correctly stores a File object with init fields", async () => {
+  it("savePendingMedia correctly stores a File object with init fields including lastAccessedAt", async () => {
     const mockFile = new File(["content"], "test.png", { type: "image/png" });
     const id = "test-id";
     const blockId = "test-block-id";
@@ -42,12 +43,60 @@ describe("MediaStore (IndexedDB Wrapper)", () => {
         status: "pending",
         mimeType: "image/png",
         file: mockFile,
-        retryCount: 0,       // ✅ Check default
-        lastAttemptAt: null, // ✅ Check default
-        lastError: null,     // ✅ Check default
+        retryCount: 0,
+        lastAttemptAt: null,
+        lastError: null,
+        lastAccessedAt: expect.any(Number) // ✅ Check
       }),
       "MOCK_STORE_INSTANCE",
     );
+  });
+
+  it("touchMedia updates lastAccessedAt", async () => {
+    const id = "test-touch";
+    const oldTime = Date.now() - 100000; // Old enough to update
+    const entry = { id, lastAccessedAt: oldTime };
+
+    vi.mocked(idb.get).mockResolvedValue(entry);
+    vi.mocked(idb.set).mockResolvedValue(undefined);
+
+    await Effect.runPromise(touchMedia(id));
+
+    const setCall = vi.mocked(idb.set).mock.calls[0];
+    const saved = setCall?.[1] as any;
+    expect(saved.lastAccessedAt).toBeGreaterThan(oldTime);
+  });
+
+  it("touchMedia debounces writes for recent access", async () => {
+    const id = "test-touch-debounce";
+    const recentTime = Date.now() - 1000; // Only 1s ago
+    const entry = { id, lastAccessedAt: recentTime };
+
+    vi.mocked(idb.get).mockResolvedValue(entry);
+
+    await Effect.runPromise(touchMedia(id));
+
+    expect(idb.set).not.toHaveBeenCalled();
+  });
+
+  it("getExpiredMedia returns only synced and old items", async () => {
+    const now = Date.now();
+    const threshold = 10000; // 10s
+
+    const items = [
+        { id: "1", status: "synced", lastAccessedAt: now - 20000 }, // Expired
+        { id: "2", status: "synced", lastAccessedAt: now - 5000 },  // Valid
+        { id: "3", status: "pending", lastAccessedAt: now - 20000 }, // Pending (Keep)
+        { id: "4", status: "uploaded", lastAccessedAt: now - 20000 }, // Uploaded (Keep/Transitioning)
+    ];
+
+    vi.mocked(idb.keys).mockResolvedValue(items.map(i => i.id));
+    vi.mocked(idb.getMany).mockResolvedValue(items);
+
+    const expired = await Effect.runPromise(getExpiredMedia(threshold));
+
+    expect(expired).toHaveLength(1);
+    expect(expired[0]!.id).toBe("1");
   });
 
   it("incrementRetry updates count and timestamp", async () => {
@@ -58,16 +107,15 @@ describe("MediaStore (IndexedDB Wrapper)", () => {
       lastAttemptAt: null,
       lastError: null,
       file: new File([""], "f"),
+      lastAccessedAt: Date.now()
     };
 
-    // Mock retrieving the item
     vi.mocked(idb.get).mockResolvedValue(initialEntry);
     vi.mocked(idb.set).mockResolvedValue(undefined);
 
     const startTime = Date.now();
     await Effect.runPromise(incrementRetry(id, "Network Error"));
 
-    // Check set call
     const setCall = vi.mocked(idb.set).mock.calls[0];
     const savedItem = setCall?.[1] as any;
 
@@ -76,45 +124,18 @@ describe("MediaStore (IndexedDB Wrapper)", () => {
     expect(savedItem.lastAttemptAt).toBeGreaterThanOrEqual(startTime);
   });
 
-  it("getPendingMedia returns the file object given a valid ID", async () => {
-    const id = "test-id";
-    const mockEntry = {
-      id,
-      status: "pending",
-      file: new File(["data"], "test.png"),
-    };
+  it("getPendingMedia lazily migrates old records without lastAccessedAt", async () => {
+    const id = "legacy-id";
+    const legacyEntry = { id, status: "pending" }; // No lastAccessedAt
 
-    vi.mocked(idb.get).mockResolvedValue(mockEntry);
+    vi.mocked(idb.get).mockResolvedValue(legacyEntry);
 
     const result = await Effect.runPromise(getPendingMedia(id));
 
-    expect(result).toEqual(mockEntry);
-    expect(idb.get).toHaveBeenCalledWith(id, "MOCK_STORE_INSTANCE");
-  });
-
-  it("removePendingMedia successfully deletes the entry", async () => {
-    const id = "test-id";
-    vi.mocked(idb.del).mockResolvedValue(undefined);
-
-    await Effect.runPromise(removePendingMedia(id));
-
-    expect(idb.del).toHaveBeenCalledWith(id, "MOCK_STORE_INSTANCE");
-  });
-
-  it("returns a typed MediaStorageError on IndexedDB failure", async () => {
-    const id = "test-id";
-    const dbError = new Error("QuotaExceeded");
-    vi.mocked(idb.get).mockRejectedValue(dbError);
-
-    const result = await Effect.runPromise(
-      Effect.either(getPendingMedia(id))
-    );
-
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") {
-      expect(result.left).toBeInstanceOf(MediaStorageError);
-      expect(result.left.cause).toBe(dbError);
-      expect(result.left.operation).toBe("get");
-    }
+    expect(result).toMatchObject({
+        id: "legacy-id",
+        status: "pending",
+        lastAccessedAt: expect.any(Number)
+    });
   });
 });

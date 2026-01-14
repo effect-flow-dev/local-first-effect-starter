@@ -1,11 +1,13 @@
+// File: ./src/lib/client/media/MediaSyncService.ts
 // FILE: src/lib/client/media/MediaSyncService.ts
 import { Context, Effect, Layer, Queue, Stream, Schema, Option, Schedule, Duration, Data } from "effect";
 import {
   getAllPendingMedia,
   getPendingMedia,
-  removePendingMedia,
   updateMediaStatus,
   incrementRetry,
+  getExpiredMedia,
+  removePendingMedia
 } from "./mediaStore";
 import { api } from "../api";
 import { ReplicacheService } from "../replicache";
@@ -13,6 +15,12 @@ import type { IReplicacheService } from "../replicache";
 import { clientLog } from "../clientLog";
 import type { BlockId } from "../../shared/schemas";
 import { NoteSchema } from "../../shared/schemas";
+
+// --- Constants ---
+const GC_INTERVAL = "12 hours";
+const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const CRITICAL_RETENTION_MS = 24 * 60 * 60 * 1000;
+const STORAGE_PRESSURE_THRESHOLD = 0.8;
 
 export interface IMediaSyncService {
   readonly queueUpload: (id: string) => Effect.Effect<void>;
@@ -110,8 +118,8 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
       return; 
     }
 
-    if (item.status === "uploaded") {
-      yield* clientLog("debug", `[MediaSync] Item ${uploadId} already uploaded.`);
+    if (item.status === "uploaded" || item.status === "synced") {
+      yield* clientLog("debug", `[MediaSync] Item ${uploadId} status is '${item.status}'. Skipping.`);
       return; 
     }
 
@@ -122,7 +130,6 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
         return yield* Effect.fail(new TransientUploadError({ message: "No JWT token found" }));
     }
 
-    // 1. Upload to API
     const response = yield* Effect.tryPromise(() =>
       api.api.media.upload.post(
         {
@@ -157,7 +164,6 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
     const publicUrl = data.url;
     yield* clientLog("info", `[MediaSync] Uploaded to Cloud: ${publicUrl}`);
 
-    // 2. Update Replicache (The Block)
     let currentVersion = 1;
     try {
         currentVersion = yield* findBlockVersionInDB(replicache, item.blockId);
@@ -167,20 +173,21 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
 
     let updated = false;
     try {
+        // ✅ FIX: Do NOT set uploadId to null. 
+        // We keep it so the UI can continue to reference the local IDB file (Binary GC).
         updated = yield* Effect.tryPromise({
             try: () =>
                 replicache.client.mutate.updateBlock({
                     blockId: item.blockId as BlockId, 
                     fields: {
-                    url: publicUrl,
-                    uploadId: null, 
+                      url: publicUrl,
+                      // uploadId: null, // <-- REMOVED this line
                     },
                     version: currentVersion
                 }),
             catch: (e) => new TransientUploadError({ message: `Mutation Failed in TryPromise: ${String(e)}` })
         });
     } catch (e) {
-        // Double catch for safety if tryPromise itself throws (rare)
         yield* clientLog("error", `[MediaSync] Replicache mutation exception`, e);
         return yield* Effect.fail(new TransientUploadError({ message: `Mutation Exception: ${String(e)}` }));
     }
@@ -192,14 +199,13 @@ const performUploadAttempt = (uploadId: string, replicache: IReplicacheService) 
        return yield* Effect.fail(new TransientUploadError({ message: `Block ${item.blockId} not found in Replicache` }));
     }
 
-    yield* clientLog("info", `[MediaSync] Block ${item.blockId} updated. Cleaning up.`);
-    yield* removePendingMedia(uploadId);
+    yield* clientLog("info", `[MediaSync] Block ${item.blockId} updated. Marking as 'synced' (cached).`);
+    yield* updateMediaStatus(uploadId, "synced");
   }).pipe(
     Effect.catchAll((e) => {
       if (e instanceof FatalUploadError || e instanceof TransientUploadError) {
         return Effect.fail(e);
       }
-      // Log unexpected errors specifically
       return Effect.fail(new TransientUploadError({ message: `System Error: ${e instanceof Error ? e.message : String(e)}` }));
     })
   );
@@ -222,6 +228,48 @@ const processUpload = (uploadId: string, replicache: IReplicacheService) =>
     )
   );
 
+// --- Garbage Collection ---
+
+const runGarbageCollection = Effect.gen(function* () {
+    let retentionMs = DEFAULT_RETENTION_MS;
+    
+    if (navigator.storage && navigator.storage.estimate) {
+        try {
+            const estimate = yield* Effect.promise(() => navigator.storage.estimate());
+            if (estimate.usage && estimate.quota) {
+                const usageRatio = estimate.usage / estimate.quota;
+                if (usageRatio > STORAGE_PRESSURE_THRESHOLD) {
+                    yield* clientLog("warn", `[MediaGC] Storage pressure detected (${(usageRatio * 100).toFixed(1)}%). Using critical retention policy.`);
+                    retentionMs = CRITICAL_RETENTION_MS;
+                }
+            }
+        } catch (e) {
+            yield* clientLog("warn", "[MediaGC] Failed to query storage estimate", e);
+        }
+    }
+
+    const expiredItems = yield* getExpiredMedia(retentionMs);
+    
+    if (expiredItems.length === 0) {
+        yield* clientLog("debug", "[MediaGC] No expired items found.");
+        return;
+    }
+
+    yield* clientLog("info", `[MediaGC] Found ${expiredItems.length} expired items. Cleaning up...`);
+
+    let deletedCount = 0;
+    let freedBytes = 0;
+
+    for (const item of expiredItems) {
+        freedBytes += item.file.size;
+        yield* removePendingMedia(item.id);
+        deletedCount++;
+    }
+
+    const freedMb = (freedBytes / 1024 / 1024).toFixed(2);
+    yield* clientLog("info", `[MediaGC] Cleanup complete. Removed ${deletedCount} files. Freed ${freedMb} MB.`);
+});
+
 export const MediaSyncLive = Layer.effect(
   MediaSyncService,
   Effect.gen(function* () {
@@ -242,7 +290,7 @@ export const MediaSyncLive = Layer.effect(
       const allItems = yield* getAllPendingMedia();
       let count = 0;
       for (const item of allItems) {
-        if (item.status !== "uploaded") {
+        if (item.status !== "uploaded" && item.status !== "synced") {
           yield* Queue.offer(queue, item.id);
           count++;
         }
@@ -253,6 +301,14 @@ export const MediaSyncLive = Layer.effect(
     });
 
     yield* Effect.forkDaemon(resumePending);
+
+    const gcSchedule = Schedule.spaced(GC_INTERVAL);
+    const gcLoop = Effect.sleep("5 seconds").pipe(
+        Effect.andThen(runGarbageCollection),
+        Effect.repeat(gcSchedule)
+    );
+
+    yield* Effect.forkDaemon(gcLoop);
 
     return {
       queueUpload: (id: string) => Queue.offer(queue, id),

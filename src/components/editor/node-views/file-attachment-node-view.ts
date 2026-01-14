@@ -5,6 +5,7 @@ import { Effect, Fiber, Schedule } from "effect";
 import {
   getPendingMedia,
   getFromMemoryCache,
+  touchMedia,
 } from "../../../lib/client/media/mediaStore";
 import { MediaSyncService } from "../../../lib/client/media/MediaSyncService";
 import type { PendingUpload } from "../../../lib/client/media/types";
@@ -59,25 +60,27 @@ export class FileAttachmentNodeView extends LitElement {
       const cached = getFromMemoryCache(this.uploadId);
       if (cached) {
         this._localBlobUrl = cached;
+        // ✅ Read-Through Tracking
+        runClientUnscoped(touchMedia(this.uploadId));
       }
     }
 
-    // Cleanup polling if we moved from uploading to done
-    const prevUploadId = changedProperties.get("uploadId");
-    if ((prevUploadId !== undefined && prevUploadId !== "") && !this.uploadId && !!this.url) {
-        runClientUnscoped(clientLog("debug", "[FileAttachment] Upload complete. Cleaning up polling."));
-        this._cleanup();
-    }
-
     if (changedProperties.has("uploadId") && this.uploadId) {
-        this._startPolling();
+        // Re-init logic if uploadId changed (e.g. initial sync)
+        this._init();
     }
   }
 
   private _init() {
-    if (this.url) return;
+    // ✅ FIX: Always try to load local blob if uploadId is present
     if (this.uploadId) {
-      this._startPolling();
+        // This sets _localBlobUrl if successful, enabling offline/instant access
+        this._loadLocalBlob(); 
+        
+        // Only start polling if we are truly pending (no URL)
+        if (!this.url) {
+            this._startPolling();
+        }
     }
   }
 
@@ -86,6 +89,22 @@ export class FileAttachmentNodeView extends LitElement {
       runClientUnscoped(Fiber.interrupt(this._pollFiber));
       this._pollFiber = null;
     }
+  }
+
+  private _loadLocalBlob() {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    runClientUnscoped(Effect.gen(function*() {
+        const item = yield* getPendingMedia(self.uploadId);
+        if (item && item.file) {
+            self._localBlobUrl = URL.createObjectURL(item.file);
+            self._isOfflineCached = true;
+            yield* touchMedia(self.uploadId);
+        }
+    }).pipe(
+        // Silent fail on load error, we fallback to URL in render
+        Effect.catchAll(() => Effect.void)
+    ));
   }
 
   private _startPolling() {
@@ -97,6 +116,8 @@ export class FileAttachmentNodeView extends LitElement {
       const item = yield* getPendingMedia(self.uploadId);
       if (item) {
         self._uploadStatus = item;
+        // ✅ Touch media on poll update
+        yield* touchMedia(self.uploadId);
       }
     }).pipe(
       Effect.catchAll((e) => Effect.logError("Polling error", e)),
@@ -115,7 +136,7 @@ export class FileAttachmentNodeView extends LitElement {
     // Check if the file is in the Service Worker cache
     runClientUnscoped(Effect.gen(function*() {
         if ('caches' in window) {
-            // Check standard media cache
+            // Check standard media cache (SW)
             const cache = yield* Effect.promise(() => caches.open("media-cache"));
             const match = yield* Effect.promise(() => cache.match(self.url));
             if (match) {
@@ -147,6 +168,11 @@ export class FileAttachmentNodeView extends LitElement {
 
   private _handleDownload = (e: Event) => {
       e.stopPropagation(); // Prevent editor selection issues
+      
+      // ✅ Explicit Touch on Interaction
+      if (this.uploadId) {
+          runClientUnscoped(touchMedia(this.uploadId));
+      }
   };
 
   private _getFileIcon() {
@@ -173,7 +199,7 @@ export class FileAttachmentNodeView extends LitElement {
     // Prioritize URL if available (complete upload), otherwise fall back to local blob (preview)
     const downloadLink = this.url || this._localBlobUrl;
 
-    // ✅ FIX: Ensure we have a valid download link to render, even if blob is revoked
+    // ✅ FIX: Ensure we have a valid download link to render
     if (!downloadLink && !isUploading && !isError) {
         runClientUnscoped(clientLog("warn", "[FileAttachment] No download link available", { url: this.url, blob: this._localBlobUrl }));
     }
