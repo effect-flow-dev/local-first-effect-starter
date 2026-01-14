@@ -31,6 +31,12 @@ export default interface BlockHistoryTable {
   hlc_timestamp: ColumnType<string, string, string>;
 
   server_received_at: ColumnType<Date, Date | string | undefined, Date | string>;
+
+  entity_id: ColumnType<string | null, string | null, string | null>;
+
+  location_source: ColumnType<string | null, string | null, string | null>;
+
+  location_accuracy: ColumnType<number | null, number | null, number | null>;
 }
 
 export type BlockHistory = Selectable<BlockHistoryTable>;

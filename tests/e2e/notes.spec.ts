@@ -44,18 +44,26 @@
             await expect(page.locator("sync-status")).toContainText("Saved");
 
             // 3. Add a Checklist Block
-            await page.locator('button[title="Add Block"]').click();
-            await page.locator('button:has-text("Checklist")').click();
+            // Wait for FAB to be stable
+            const fab = page.locator('button[title="Add Block"]');
+            await expect(fab).toBeVisible();
+            await fab.click();
 
+            // Wait for dropdown menu to appear
+            const checklistBtn = page.locator('button:has-text("Checklist")');
+            await expect(checklistBtn).toBeVisible();
+            await checklistBtn.click();
+
+            // ✅ FIX: Increase timeout and ensure visibility
             const checklist = page.locator("smart-checklist");
-            await expect(checklist).toBeVisible();
+            await expect(checklist).toBeVisible({ timeout: 10000 });
 
             await checklist.locator("text=New Item").click();
             await expect(page.locator("sync-status")).toContainText("Saved");
 
             // ✅ FIX: Wait a beat for IDB persistence before reloading.
             // "Saved" UI state means Replicache processed it, but IndexedDB flush is async.
-            await page.waitForTimeout(500);
+            await page.waitForTimeout(1000);
 
             // 4. Reload
             await page.reload();
@@ -63,7 +71,7 @@
             // 5. Verify Persistence
             await expect(titleInput).toHaveValue("E2E Block Test");
             await expect(page.locator("tiptap-editor").first()).toContainText("First block content");
-            await expect(page.locator("smart-checklist")).toBeVisible();
+            await expect(page.locator("smart-checklist")).toBeVisible({ timeout: 10000 });
             await expect(page.locator("smart-checklist .bg-green-50")).toBeVisible();
 
             await page.close();

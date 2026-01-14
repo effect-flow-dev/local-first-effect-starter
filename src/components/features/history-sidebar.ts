@@ -1,3 +1,4 @@
+// File: ./src/components/features/history-sidebar.ts
 // FILE: src/components/features/history-sidebar.ts
 import { LitElement, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
@@ -50,9 +51,6 @@ export class HistorySidebar extends LitElement {
     return this; 
   }
 
-  /**
-   * Formats the untrusted Device Timestamp for display.
-   */
   private _formatDeviceDate(dateVal: string | Date) {
     try {
       const date = new Date(dateVal);
@@ -76,6 +74,19 @@ export class HistorySidebar extends LitElement {
     if (typeof delta !== "object" || delta === null) return JSON.stringify(delta);
 
     const d = delta as Record<string, unknown>;
+
+    // Handle Location Context Updates
+    // ✅ FIX: Safely cast unknown properties before using in template literals
+    const entityId = d.entityId as string | undefined;
+    const locationSource = d.locationSource as string | undefined;
+    const locationAccuracy = d.locationAccuracy as number | undefined;
+
+    if (entityId || locationSource) {
+        const source = locationSource || "manual";
+        if (entityId) return `Linked to Entity (${source})`;
+        if (locationSource === 'gps') return `Updated via GPS (±${locationAccuracy ?? '?'}m)`;
+        if (locationSource === 'manual') return `Manually moved location`;
+    }
 
     if (mutationType === "updateTask") {
       if (typeof d.isComplete === "boolean") {
@@ -240,10 +251,27 @@ export class HistorySidebar extends LitElement {
     return html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
   }
 
+  // ✅ FIX: Use HistoryEntry type and intersect with database fields
+  // This avoids 'any' and unsafe member access errors.
+  private _renderSourceBadge(entry: HistoryEntry) {
+    const e = entry as HistoryEntry & { location_source?: string | null };
+    const source = e.location_source;
+    
+    if (!source) return nothing;
+
+    if (source === 'entity_fixed') {
+        return html`<span class="ml-auto text-[10px] uppercase font-bold text-green-700 bg-green-100 px-1.5 py-0.5 rounded">Fixed Asset</span>`;
+    }
+    if (source === 'gps') {
+        return html`<span class="ml-auto text-[10px] uppercase font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">GPS</span>`;
+    }
+    
+    return nothing;
+  }
+
   override render() {
     const isOpen = isHistoryOpen.value;
     
-    // ✅ FIX: Explicit sorting by hlc_timestamp in the UI to handle eventual consistency
     const entries = [...historyEntries.value].sort((a, b) => 
         b.hlc_timestamp.localeCompare(a.hlc_timestamp)
     );
@@ -305,9 +333,12 @@ export class HistorySidebar extends LitElement {
                             ${this._getIcon(entry.mutation_type)}
                         </div>
                         <div class="flex-1 min-w-0">
-                            <p class="text-sm font-medium ${isSelected ? 'text-blue-900' : 'text-zinc-900'}">
-                                ${this._formatDelta(entry.mutation_type, entry.change_delta)}
-                            </p>
+                            <div class="flex items-center justify-between">
+                                <p class="text-sm font-medium ${isSelected ? 'text-blue-900' : 'text-zinc-900'}">
+                                    ${this._formatDelta(entry.mutation_type, entry.change_delta)}
+                                </p>
+                                ${this._renderSourceBadge(entry)}
+                            </div>
                             <div class="mt-0.5 flex flex-col gap-0.5 text-xs text-zinc-500">
                                 <span title="Physical device time recorded at source">
                                     Device: ${this._formatDeviceDate(entry.device_timestamp as unknown as string)}
@@ -318,7 +349,6 @@ export class HistorySidebar extends LitElement {
                             </div>
                         </div>
                         
-                        <!-- Quick Restore for Blocks -->
                         ${["updateTask", "updateBlock"].includes(entry.mutation_type) ? html`
                             <button
                             class="absolute right-2 top-2 opacity-0 group-hover:opacity-100 rounded bg-white px-2 py-1 text-xs font-medium text-blue-600 shadow-sm ring-1 ring-zinc-200 hover:bg-blue-50 transition-all"

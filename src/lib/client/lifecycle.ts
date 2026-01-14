@@ -15,6 +15,10 @@ import {
   startNotebookSubscription,
   stopNotebookSubscription,
 } from "./stores/notebookStore";
+import {
+  startEntitySubscription,
+  stopEntitySubscription,
+} from "./stores/entityStore"; // ✅ Added
 import { resetTabs } from "./stores/tabStore";
 
 // Raw stream of auth state changes from the signal
@@ -52,16 +56,16 @@ const coordinatedAuthStream = authStream.pipe(
             "[coordinator] Runtime is ACTIVE. Starting subscriptions...",
           );
           startNoteListSubscription();
-          // ✅ NEW: Start Notebook subscription
           startNotebookSubscription();
+          startEntitySubscription(); // ✅ Start Entity Sync
         } else if (auth.status === "unauthenticated") {
           yield* clientLog(
             "info",
             "[coordinator] Auth state is UNAUTHENTICATED. Deactivating runtime...",
           );
           stopNoteListSubscription();
-          // ✅ NEW: Stop Notebook subscription
           stopNotebookSubscription();
+          stopEntitySubscription(); // ✅ Stop Entity Sync
           
           resetTabs();
           

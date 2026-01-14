@@ -9,6 +9,8 @@ import {
   LatitudeSchema,
   LongitudeSchema,
   HlcMetadataSchema, 
+  EntityIdSchema, // ✅ Added
+  LocationSourceSchema, // ✅ Added
 } from "../../lib/shared/schemas";
 
 export { CreateBlockArgsSchema } from "../../lib/shared/schemas";
@@ -25,6 +27,23 @@ export const TemplateItemSchema = Schema.Struct({
   fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   content: Schema.optional(Schema.String)
 });
+
+// // ✅ UPDATED: Add location fields to base for Create
+// const CreateBlockBase = {
+//   noteId: NoteIdSchema,
+//   blockId: BlockIdSchema,
+//   latitude: Schema.optional(LatitudeSchema),
+//   longitude: Schema.optional(LongitudeSchema),
+//   content: Schema.optional(Schema.String),
+//   // New Context Fields
+//   entityId: Schema.optional(EntityIdSchema),
+//   locationSource: Schema.optional(LocationSourceSchema),
+//   locationAccuracy: Schema.optional(Schema.Number),
+//   ...HlcMetadataSchema, 
+// };
+
+// Re-defining these here because they were locally defined in the previous version of this file,
+// but relying on the shared one is better. However, to fix the immediate TS error without refactoring imports everywhere:
 
 export const CreateNoteArgsSchema = Schema.Struct({
   id: NoteIdSchema,
@@ -58,10 +77,17 @@ export const UpdateTaskArgsSchema = Schema.Struct({
   ...HlcMetadataSchema, 
 });
 
+// ✅ FIXED: UpdateBlockArgsSchema includes new location fields
 export const UpdateBlockArgsSchema = Schema.Struct({
   blockId: BlockIdSchema,
   fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   version: Schema.Number,
+  // Location overrides
+  entityId: Schema.optional(Schema.Union(EntityIdSchema, Schema.Null)),
+  locationSource: Schema.optional(LocationSourceSchema),
+  locationAccuracy: Schema.optional(Schema.Number),
+  latitude: Schema.optional(LatitudeSchema),
+  longitude: Schema.optional(LongitudeSchema),
   ...HlcMetadataSchema, 
 });
 

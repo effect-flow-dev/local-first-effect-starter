@@ -1,4 +1,4 @@
-// File: src/features/note/mutations/block.ts
+// FILE: src/features/note/mutations/block.ts
 import { Effect, Schema } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
@@ -12,7 +12,7 @@ import {
     IncrementCounterArgsSchema 
 } from "../note.schemas";
 import { _syncTaskTable } from "./task"; 
-import type { UserId, TiptapTextNode } from "../../../lib/shared/schemas";
+import type { UserId, TiptapTextNode, EntityId } from "../../../lib/shared/schemas";
 import type { InteractiveBlock } from "../../../lib/shared/schemas";
 
 interface ContentNode {
@@ -26,6 +26,45 @@ interface ContentNode {
     content?: ContentNode[];
 }
 
+/**
+ * Resolves location "truth".
+ * If entityId is provided, we fetch the fixed coordinates from the DB.
+ * Otherwise, we fallback to the provided GPS coordinates.
+ */
+const resolveLocation = (
+    db: Kysely<Database> | Transaction<Database>,
+    args: { entityId?: string | null, latitude?: number, longitude?: number, locationAccuracy?: number }
+) => Effect.gen(function* () {
+    if (args.entityId) {
+        const entity = yield* Effect.tryPromise({
+            try: () => db.selectFrom("entity")
+                .select(["latitude", "longitude"])
+                .where("id", "=", args.entityId as EntityId)
+                .executeTakeFirst(),
+            catch: (cause) => new NoteDatabaseError({ cause })
+        });
+
+        if (entity) {
+            return {
+                latitude: entity.latitude,
+                longitude: entity.longitude,
+                entityId: args.entityId as EntityId,
+                locationSource: "entity_fixed" as const,
+                locationAccuracy: 0 // Fixed location has perfect accuracy (effectively)
+            };
+        }
+    }
+
+    // Fallback: Use client-provided coordinates
+    return {
+        latitude: args.latitude ?? null,
+        longitude: args.longitude ?? null,
+        entityId: null,
+        locationSource: (args.locationAccuracy ? "gps" : "manual"),
+        locationAccuracy: args.locationAccuracy ?? null
+    };
+});
+
 export const handleCreateBlock = (
     db: Kysely<Database> | Transaction<Database>,
     args: Schema.Schema.Type<typeof CreateBlockArgsSchema>,
@@ -35,6 +74,13 @@ export const handleCreateBlock = (
     Effect.gen(function* () {
         yield* Effect.logInfo(`[handleCreateBlock] Block ${args.blockId}, HLC: ${globalVersion}`);
         const deviceTime = args.deviceTimestamp || new Date();
+
+        const locationData = yield* resolveLocation(db, {
+            entityId: args.entityId,
+            latitude: args.latitude,
+            longitude: args.longitude,
+            locationAccuracy: args.locationAccuracy
+        });
 
         const maxOrderRow = yield* Effect.tryPromise({
             try: () =>
@@ -68,8 +114,14 @@ export const handleCreateBlock = (
                         created_at: sql<Date>`now()`,
                         updated_at: sql<Date>`now()`,
                         global_version: globalVersion, 
-                        latitude: args.latitude ?? null,
-                        longitude: args.longitude ?? null,
+                        
+                        // Location Context
+                        latitude: locationData.latitude,
+                        longitude: locationData.longitude,
+                        entity_id: locationData.entityId,
+                        location_source: locationData.locationSource,
+                        location_accuracy: locationData.locationAccuracy,
+                        
                         device_created_at: deviceTime,
                         parent_id: null
                     })
@@ -89,13 +141,13 @@ export const handleCreateBlock = (
 
             let newNode: ContentNode;
             if (args.type === "tiptap_text") {
-                 newNode = {
+                    newNode = {
                     type: "paragraph",
                     attrs: { blockId: args.blockId, version: 1 },
                     content: args.content ? [{ type: "text", text: args.content } as TiptapTextNode] : []
-                 };
+                    };
             } else {
-                 newNode = {
+                    newNode = {
                     type: "interactiveBlock",
                     attrs: { 
                         blockId: args.blockId, 
@@ -103,7 +155,7 @@ export const handleCreateBlock = (
                         version: 1, 
                         fields: fields as InteractiveBlock["attrs"]["fields"] 
                     }
-                 };
+                    };
             }
             doc.content.push(newNode);
 
@@ -125,9 +177,13 @@ export const handleCreateBlock = (
             noteId: args.noteId,
             userId: userId,
             mutationType: "createBlock",
-            args: args,
+            args: { ...args, ...locationData }, 
             hlcTimestamp: globalVersion, 
-            deviceTimestamp: deviceTime   
+            deviceTimestamp: deviceTime,
+            // ✅ Pass Location Context to History
+            entityId: locationData.entityId,
+            locationSource: locationData.locationSource,
+            locationAccuracy: locationData.locationAccuracy
         });
     });
 
@@ -151,14 +207,48 @@ export const handleUpdateBlock = (
 
         if (!blockRow) return;
 
+        // Resolve Location Truth if location arguments are present
+        // We use a temporary variable for the resolved data
+        let resolvedLocation = {};
+        
+        // This object maps to DB columns for the 'block' table update
+        let dbLocationUpdates = {};
+
+        if (args.entityId !== undefined || args.latitude !== undefined) {
+                const res = yield* resolveLocation(db, {
+                entityId: args.entityId,
+                latitude: args.latitude,
+                longitude: args.longitude,
+                locationAccuracy: args.locationAccuracy
+            });
+            
+            // Map to DB column names for updateTable
+            dbLocationUpdates = {
+                latitude: res.latitude,
+                longitude: res.longitude,
+                entity_id: res.entityId,
+                location_source: res.locationSource,
+                location_accuracy: res.locationAccuracy
+            };
+
+            // Map to history payload (camelCase)
+            resolvedLocation = {
+                entityId: res.entityId,
+                locationSource: res.locationSource,
+                locationAccuracy: res.locationAccuracy
+            };
+        }
+
         const historyId = yield* logBlockHistory(db, {
             blockId: args.blockId,
             noteId: blockRow.note_id!,
             userId: userId,
             mutationType: "updateBlock",
-            args: args,
+            args: { ...args, ...resolvedLocation },
             hlcTimestamp: globalVersion,
-            deviceTimestamp: deviceTime
+            deviceTimestamp: deviceTime,
+            // ✅ Pass Location Context to History
+            ...resolvedLocation
         });
 
         const currentVersion = blockRow?.version ?? 1;
@@ -206,7 +296,6 @@ export const handleUpdateBlock = (
 
             if (noteRow && noteRow.content) {
                 const content = JSON.parse(typeof noteRow.content === "string" ? noteRow.content : JSON.stringify(noteRow.content)) as ContentNode;
-                // ✅ FIX: Pass contentUpdate to updateBlockInContent to keep note JSON consistent
                 if (updateBlockInContent(content, args.blockId, fieldsToSave, validationWarning, contentUpdate)) {
                     yield* Effect.tryPromise({
                         try: () => db.updateTable("note").set({
@@ -228,7 +317,7 @@ export const handleUpdateBlock = (
             }, globalVersion);
         }
 
-        // Update Block Table
+        // Update Block Table with location overrides
         yield* Effect.tryPromise({
             try: () => {
                 const updateQuery = db.updateTable("block")
@@ -237,6 +326,7 @@ export const handleUpdateBlock = (
                         version: sql<number>`version + 1`,
                         updated_at: sql<Date>`now()`,
                         global_version: globalVersion,
+                        ...dbLocationUpdates // ✅ Apply Location Truth
                     });
                 
                 if (contentUpdate !== undefined) {
@@ -246,6 +336,7 @@ export const handleUpdateBlock = (
                         version: sql<number>`version + 1`,
                         updated_at: sql<Date>`now()`,
                         global_version: globalVersion,
+                        ...dbLocationUpdates
                     }).where("id", "=", args.blockId).execute();
                 } else {
                     return updateQuery.where("id", "=", args.blockId).execute();

@@ -260,6 +260,9 @@ export class NotePage extends LitElement {
         const blockId = uuidv4() as BlockId;
 
         runClientUnscoped(Effect.gen(function* () {
+            // ✅ DEBUG LOG
+            yield* clientLog("info", `[NotePage] Adding block of type ${type}...`);
+            
             const location = yield* getCurrentPosition();
             const replicache = yield* ReplicacheService;
             const hlc = yield* HlcService;

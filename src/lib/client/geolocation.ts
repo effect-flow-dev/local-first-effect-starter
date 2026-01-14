@@ -6,6 +6,7 @@ import { runClientUnscoped } from "./runtime";
 export interface GeoLocation {
   latitude: number;
   longitude: number;
+  accuracy: number; // ✅ Added accuracy (meters)
 }
 
 export const getCurrentPosition = () =>
@@ -20,6 +21,7 @@ export const getCurrentPosition = () =>
         const coords = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy, // ✅ Capture accuracy
         };
         // Fire-and-forget log to avoid blocking the resume logic with async log overhead
         runClientUnscoped(clientLog("debug", "[Geolocation] Acquired", coords));
@@ -32,7 +34,7 @@ export const getCurrentPosition = () =>
       },
       {
         enableHighAccuracy: true,
-        timeout: 3000, // Short timeout (3s) to prevent UI stalling
+        timeout: 5000, // Increased slightly to 5s to allow better GPS lock
         maximumAge: 60000, // Accept cached position up to 1 min old
       }
     );

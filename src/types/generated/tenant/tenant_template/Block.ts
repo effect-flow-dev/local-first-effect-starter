@@ -3,6 +3,7 @@
 
 import type { NoteId } from './Note';
 import type { UserId } from './User';
+import type { EntityId } from './Entity';
 import type { ColumnType, Selectable, Insertable, Updateable } from 'kysely';
 
 /** Identifier type for public.block */
@@ -49,6 +50,12 @@ export default interface BlockTable {
   latitude: ColumnType<number | null, number | null, number | null>;
 
   longitude: ColumnType<number | null, number | null, number | null>;
+
+  entity_id: ColumnType<EntityId | null, EntityId | null, EntityId | null>;
+
+  location_source: ColumnType<string, string | undefined, string>;
+
+  location_accuracy: ColumnType<number | null, number | null, number | null>;
 }
 
 export type Block = Selectable<BlockTable>;

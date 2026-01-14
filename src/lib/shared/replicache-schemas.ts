@@ -6,6 +6,7 @@ import {
   BlockIdSchema,
   TiptapDocSchema,
   NotebookIdSchema,
+  EntityIdSchema,
 } from "./schemas";
 
 // --- CVR (Client View Record) ---
@@ -13,6 +14,7 @@ export const CvrDataSchema = Schema.Struct({
   notes: Schema.Array(NoteIdSchema),
   blocks: Schema.Array(BlockIdSchema),
   notebooks: Schema.optional(Schema.Array(NotebookIdSchema)),
+  entities: Schema.optional(Schema.Array(EntityIdSchema)),
 });
 
 export type CvrData = Schema.Schema.Type<typeof CvrDataSchema>;
@@ -27,7 +29,6 @@ export type SyncFilter = Schema.Schema.Type<typeof SyncFilterSchema>;
 // --- PULL ---
 export const PullRequestSchema = Schema.Struct({
   clientGroupID: Schema.String,
-  // ✅ CHANGED: cookie now accepts string for HLC support
   cookie: Schema.Union(Schema.Number, Schema.String, Schema.Null),
   filter: Schema.optional(SyncFilterSchema),
 });
@@ -65,6 +66,13 @@ const SerializedBlockSchema = Schema.Struct({
   created_at: Schema.String,
   updated_at: Schema.String,
   global_version: Schema.optional(Schema.String),
+  // ✅ NEW: Location Context Fields (Fixing TS2353)
+  latitude: Schema.optional(Schema.Number),
+  longitude: Schema.optional(Schema.Number),
+  device_created_at: Schema.optional(Schema.String),
+  entity_id: Schema.optional(Schema.Union(EntityIdSchema, Schema.Null)),
+  location_source: Schema.optional(Schema.String),
+  location_accuracy: Schema.optional(Schema.Number)
 });
 
 const SerializedNotebookSchema = Schema.Struct({
@@ -76,6 +84,17 @@ const SerializedNotebookSchema = Schema.Struct({
   global_version: Schema.optional(Schema.String),
 });
 
+const SerializedEntitySchema = Schema.Struct({
+  _tag: Schema.Literal("entity"),
+  id: EntityIdSchema,
+  name: Schema.String,
+  latitude: Schema.Number,
+  longitude: Schema.Number,
+  description: Schema.Union(Schema.String, Schema.Null),
+  created_at: Schema.String,
+  updated_at: Schema.String,
+});
+
 const PatchOperationSchema = Schema.Union(
   Schema.Struct({ op: Schema.Literal("clear") }),
   Schema.Struct({
@@ -84,14 +103,14 @@ const PatchOperationSchema = Schema.Union(
     value: Schema.Union(
       SerializedNoteSchema,
       SerializedBlockSchema,
-      SerializedNotebookSchema
+      SerializedNotebookSchema,
+      SerializedEntitySchema
     ),
   }),
   Schema.Struct({ op: Schema.Literal("del"), key: Schema.String }),
 );
 
 export const PullResponseSchema = Schema.Struct({
-  // ✅ CHANGED: cookie is now polymorphic (Number | String) to handle HLCs
   cookie: Schema.Union(Schema.Number, Schema.String),
   lastMutationIDChanges: Schema.Record({
     key: Schema.String,

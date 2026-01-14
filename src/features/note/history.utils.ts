@@ -11,6 +11,7 @@ import { NoteDatabaseError } from "./Errors";
  * 
  * Records an entry in the audit trail.
  * Now requires HLC and Device timestamps to ensure causal integrity.
+ * Updated to support Location Context columns.
  */
 export const logBlockHistory = (
   db: Kysely<Database> | Transaction<Database>,
@@ -24,6 +25,10 @@ export const logBlockHistory = (
     // The Three Times:
     hlcTimestamp: string;       // The Causal Truth
     deviceTimestamp: Date;      // The Untrusted Device Clock
+    // Location Context
+    entityId?: string | null;
+    locationSource?: string;
+    locationAccuracy?: number | null;
   }
 ) =>
   Effect.tryPromise({
@@ -45,6 +50,11 @@ export const logBlockHistory = (
           hlc_timestamp: payload.hlcTimestamp,
           device_timestamp: payload.deviceTimestamp,
           server_received_at: now,
+
+          // Location Context
+          entity_id: payload.entityId,
+          location_source: payload.locationSource,
+          location_accuracy: payload.locationAccuracy,
         })
         .returning("id")
         .executeTakeFirstOrThrow();
