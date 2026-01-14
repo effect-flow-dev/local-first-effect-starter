@@ -1,131 +1,209 @@
-// File: src/features/note/note.mutations.block.test.ts
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Effect } from "effect";
+// FILE: src/features/note/note.mutations.block.test.ts
+import { describe, it, expect, afterAll, beforeEach } from "vitest";
+import { Effect, Either } from "effect";
 import { handleUpdateBlock } from "./note.mutations";
+import { createTestUserSchema, closeTestDb } from "../../test/db-utils";
+import { randomUUID } from "node:crypto";
 import type { UserId, BlockId, NoteId } from "../../lib/shared/schemas";
+import { sql, type Kysely } from "kysely"; // ✅ Import 'sql'
+import type { Database } from "../../types";
+import { VersionConflictError } from "./Errors";
 
-const USER_ID = "user-1" as UserId;
-const NOTE_ID = "note-1" as NoteId;
-const BLOCK_ID = "block-1" as BlockId;
+const INITIAL_HLC = "1736612345000:0001:TEST";
+const NEXT_HLC = "1736612346000:0001:TEST";
 
-// --- Mocks ---
-const mockExecute = vi.fn().mockResolvedValue([]);
-const mockExecuteTakeFirst = vi.fn().mockResolvedValue(undefined);
-const mockExecuteTakeFirstOrThrow = vi.fn().mockResolvedValue({ id: "history-1" });
+describe("handleUpdateBlock Mutation (Integration)", () => {
+  let db: Kysely<Database>;
+  let cleanup: () => Promise<void>;
+  let userId: UserId;
 
-const mockQueryBuilder = {
-  select: vi.fn().mockReturnThis(),
-  selectFrom: vi.fn().mockReturnThis(),
-  where: vi.fn().mockReturnThis(),
-  updateTable: vi.fn().mockReturnThis(),
-  insertInto: vi.fn().mockReturnThis(),
-  values: vi.fn().mockReturnThis(),
-  returning: vi.fn().mockReturnThis(),
-  set: vi.fn().mockReturnThis(),
-  orderBy: vi.fn().mockReturnThis(),
-  execute: mockExecute,
-  executeTakeFirst: mockExecuteTakeFirst,
-  executeTakeFirstOrThrow: mockExecuteTakeFirstOrThrow,
-};
-
-const mockDb = {
-  selectFrom: vi.fn().mockReturnValue(mockQueryBuilder),
-  updateTable: vi.fn().mockReturnValue(mockQueryBuilder),
-  insertInto: vi.fn().mockReturnValue(mockQueryBuilder),
-  fn: {
-      max: vi.fn().mockReturnValue({ as: vi.fn().mockReturnThis() })
-  }
-} as any;
-
-vi.mock("../replicache/versioning", () => ({
-  getNextGlobalVersion: vi.fn(() => Effect.succeed(100))
-}));
-
-// Mock history utils to avoid DB calls
-vi.mock("./history.utils", () => ({
-    logBlockHistory: vi.fn(() => Effect.succeed("history-1")),
-    markHistoryRejected: vi.fn(() => Effect.succeed(undefined))
-}));
-
-describe("handleUpdateBlock Mutation", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockExecute.mockResolvedValue([]);
-    mockExecuteTakeFirstOrThrow.mockResolvedValue({ id: "history-1" });
-    mockExecuteTakeFirst.mockResolvedValue(undefined);
+  afterAll(async () => {
+    await closeTestDb();
   });
 
-  it("correctly merges new fields into existing block attributes in Note content", async () => {
-    // 1. Mock Block Lookup (Resolving note_id and current version)
-    mockExecuteTakeFirst.mockResolvedValueOnce({ 
-        note_id: NOTE_ID, 
-        version: 1, 
-        type: "interactiveBlock", 
-        fields: { caption: "Existing", width: 500 } 
-    });
-    
-    // 2. Mock Note Lookup (Fetching the Prosemirror tree)
-    const existingContent = {
-      type: "doc",
-      content: [
-        {
-          type: "interactiveBlock",
-          attrs: {
-            blockId: BLOCK_ID,
-            version: 1,
-            fields: { caption: "Existing", width: 500 },
-          },
-        },
-      ],
+  beforeEach(async () => {
+    const id = randomUUID() as UserId;
+    userId = id;
+    const setup = await createTestUserSchema(id);
+    db = setup.db;
+    cleanup = setup.cleanup;
+    return async () => {
+      await cleanup();
     };
-    mockExecuteTakeFirst.mockResolvedValueOnce({ id: NOTE_ID, content: existingContent });
-
-    // 3. Execute Mutation
-    await Effect.runPromise(
-      handleUpdateBlock(
-        mockDb, 
-        { 
-          blockId: BLOCK_ID, 
-          fields: { width: 600 },
-          version: 1 
-        }, 
-        USER_ID,
-        "1000:0000:TEST" 
-      )
-    );
-
-    // 4. Verification
-    expect(mockDb.updateTable).toHaveBeenCalledWith("note");
-    expect(mockDb.updateTable).toHaveBeenCalledWith("block");
-    
-    const setCalls = mockQueryBuilder.set.mock.calls;
-    
-    // Find the call that updates note content
-    // ✅ FIXED: We must parse the stringified JSON from the mock arguments
-    const noteUpdateArgs = setCalls.find((args: any[]) => args[0].content)?.[0];
-    expect(noteUpdateArgs).toBeDefined();
-    
-    const parsedContent = JSON.parse(noteUpdateArgs.content);
-    expect(parsedContent.content[0].attrs.fields.width).toBe(600);
-    expect(parsedContent.content[0].attrs.fields.caption).toBe("Existing");
-    
-    expect(noteUpdateArgs.global_version).toBe("1000:0000:TEST");
   });
 
-  it("is idempotent if the block record does not exist (note lookup fails)", async () => {
-    // 1. Resolve Block -> Returns undefined (Block not found)
-    mockExecuteTakeFirst.mockResolvedValueOnce(undefined);
+  // --- Data Seeding Helper ---
+  const setupTestBlock = (db: Kysely<Database>, userId: UserId) =>
+    Effect.gen(function* () {
+      const noteId = randomUUID() as NoteId;
+      const blockId = randomUUID() as BlockId;
 
+      yield* Effect.promise(() =>
+        db
+          .insertInto("note")
+          .values({
+            id: noteId,
+            user_id: userId,
+            title: "Integration Test Note",
+            content: { type: "doc", content: [] },
+            version: 1,
+            // ✅ FIX: Use DB clock for consistency
+            created_at: sql`now()`,
+            updated_at: sql`now()`,
+            global_version: INITIAL_HLC,
+          })
+          .execute()
+      );
+
+      yield* Effect.promise(() =>
+        db
+          .insertInto("block")
+          .values({
+            id: blockId,
+            note_id: noteId,
+            user_id: userId,
+            type: "interactiveBlock",
+            content: "",
+            fields: { status: "open", width: 100 },
+            file_path: "",
+            depth: 0,
+            order: 0,
+            tags: [],
+            links: [],
+            transclusions: [],
+            version: 1,
+            // ✅ FIX: Use DB clock for consistency
+            created_at: sql`now()`,
+            updated_at: sql`now()`,
+            global_version: INITIAL_HLC,
+          })
+          .execute()
+      );
+
+      return { noteId, blockId };
+    });
+
+  it("Scenario A: Successful update merges fields, increments version, and persists data", async () => {
     await Effect.runPromise(
-      handleUpdateBlock(mockDb, { 
-          blockId: BLOCK_ID, 
-          fields: { foo: "bar" },
-          version: 1 
-      }, USER_ID, "2000:0000:TEST") 
-    );
+      Effect.gen(function* () {
+        const { blockId } = yield* setupTestBlock(db, userId);
 
-    expect(mockDb.selectFrom).toHaveBeenCalledWith("block");
-    // Should exit early and not perform any updates
-    expect(mockDb.updateTable).not.toHaveBeenCalled();
+        yield* handleUpdateBlock(
+          db,
+          {
+            blockId,
+            fields: { status: "closed", height: 50 },
+            version: 1, 
+          },
+          userId,
+          NEXT_HLC
+        );
+
+        const block = yield* Effect.promise(() =>
+          db
+            .selectFrom("block")
+            .selectAll()
+            .where("id", "=", blockId)
+            .executeTakeFirstOrThrow()
+        );
+
+        const fields = block.fields as Record<string, unknown>;
+
+        expect(fields["status"]).toBe("closed"); 
+        expect(fields["width"]).toBe(100);       
+        expect(fields["height"]).toBe(50);       
+
+        expect(block.version).toBe(2);
+        
+        // Assert timestamps match ordering (Updated >= Created)
+        expect(block.updated_at.getTime()).toBeGreaterThanOrEqual(block.created_at.getTime());
+      })
+    );
+  });
+
+  it("Scenario B: Stale write (Version Conflict) fails and does NOT log history", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { blockId } = yield* setupTestBlock(db, userId);
+
+        // 1. Manually bump version to simulate race
+        yield* Effect.promise(() => 
+          db.updateTable("block").set({ version: 2 }).where("id", "=", blockId).execute()
+        );
+
+        const result = yield* Effect.either(
+            handleUpdateBlock(
+                db,
+                { blockId, fields: { status: "investigation_pending" }, version: 1 }, // Stale
+                userId,
+                NEXT_HLC
+            )
+        );
+
+        expect(Either.isLeft(result)).toBe(true);
+        if (Either.isLeft(result)) {
+            expect(result.left).toBeInstanceOf(VersionConflictError);
+        }
+
+        const history = yield* Effect.promise(() =>
+          db
+            .selectFrom("block_history")
+            .selectAll()
+            .where("block_id", "=", blockId)
+            .execute()
+        );
+        expect(history).toHaveLength(0);
+      })
+    );
+  });
+
+  it("Scenario C: Concurrency & HLC Integrity", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { blockId } = yield* setupTestBlock(db, userId);
+
+        yield* handleUpdateBlock(
+          db,
+          { blockId, fields: { foo: "bar" }, version: 1 },
+          userId,
+          NEXT_HLC 
+        );
+
+        const block = yield* Effect.promise(() =>
+          db
+            .selectFrom("block")
+            .select("global_version")
+            .where("id", "=", blockId)
+            .executeTakeFirstOrThrow()
+        );
+
+        expect(block.global_version).toBe(NEXT_HLC);
+      })
+    );
+  });
+
+  it("Scenario D: Idempotency - does not crash or create phantom records if block does not exist", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const phantomId = randomUUID() as BlockId;
+
+        yield* handleUpdateBlock(
+          db,
+          { blockId: phantomId, fields: { status: "active" }, version: 1 },
+          userId,
+          NEXT_HLC
+        );
+
+        const block = yield* Effect.promise(() =>
+          db.selectFrom("block").select("id").where("id", "=", phantomId).executeTakeFirst()
+        );
+        expect(block).toBeUndefined();
+
+        const history = yield* Effect.promise(() =>
+          db.selectFrom("block_history").select("id").where("block_id", "=", phantomId).execute()
+        );
+        expect(history).toHaveLength(0);
+      })
+    );
   });
 });

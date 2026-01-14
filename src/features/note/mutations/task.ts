@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
 import { NoteDatabaseError, VersionConflictError } from "../Errors";
-import { logBlockHistory, markHistoryRejected } from "../history.utils";
+import { logBlockHistory } from "../history.utils";
 import { updateTaskInContent } from "../utils/content-traversal";
 import type { UpdateTaskArgsSchema } from "../note.schemas";
 import type { UserId, BlockId } from "../../../lib/shared/schemas";
@@ -21,8 +21,6 @@ interface ContentNode {
 
 /**
  * Shared helper to sync the denormalized task table.
- * This ensures fields like due_at and is_complete stay in sync regardless 
- * of which mutation triggered the change.
  */
 export const _syncTaskTable = (
     db: Kysely<Database> | Transaction<Database>,
@@ -41,8 +39,6 @@ export const _syncTaskTable = (
 
     if (updates.due_at !== undefined) {
         updatePayload.due_at = updates.due_at;
-        // If the due date changed, we reset alert_sent_at 
-        // so the AlertWorker can notify the user of the new time.
         updatePayload.alert_sent_at = null;
     }
 
@@ -74,7 +70,7 @@ export const handleUpdateTask = (
     if (!blockRow) return;
 
     // Log History First
-    const historyId = yield* logBlockHistory(db, {
+    yield* logBlockHistory(db, {
         blockId: args.blockId,
         noteId: blockRow.note_id!,
         userId: userId,
@@ -87,7 +83,7 @@ export const handleUpdateTask = (
     // Version Check
     const currentVersion = blockRow?.version ?? 1;
     if (args.version !== currentVersion) {
-        yield* markHistoryRejected(db, historyId);
+        // Linear History: Fail immediately without mutating history
         return yield* Effect.fail(new VersionConflictError({
             blockId: args.blockId,
             expectedVersion: currentVersion,

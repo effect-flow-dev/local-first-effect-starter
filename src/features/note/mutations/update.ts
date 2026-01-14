@@ -1,4 +1,4 @@
-// File: src/features/note/mutations/update.ts
+// FILE: src/features/note/mutations/update.ts
 import { Effect } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
@@ -84,7 +84,6 @@ export const _applyNoteUpdate = (
 
         yield* Effect.all([
             updateLinksForNote(db, args.id, userId),
-            // ✅ FIXED: Added globalVersion argument
             syncTasksForNote(db, args.id, userId, globalVersion),
         ], { concurrency: "unbounded" });
     }
@@ -125,6 +124,8 @@ export const handleRevertNote = (
     globalVersion: string 
 ) =>
     Effect.gen(function* () {
+        yield* Effect.logInfo(`[handleRevertNote] Reverting note ${args.noteId} to history ${args.historyId}. HLC: ${globalVersion}`);
+
         const existingNote = yield* Effect.tryPromise({
             try: () => db.selectFrom("note").select("id").where("title", "=", args.targetSnapshot.title).where("id", "!=", args.noteId).executeTakeFirst(),
             catch: (cause) => new NoteDatabaseError({ cause }),
@@ -142,6 +143,7 @@ export const handleRevertNote = (
 
         yield* _applyNoteUpdate(db, updateArgs, userId, globalVersion);
 
+        // ✅ LINEAR HISTORY: Link to the old event
         yield* logBlockHistory(db, {
             blockId: args.noteId,
             noteId: args.noteId,
@@ -150,6 +152,7 @@ export const handleRevertNote = (
             args: { revertedTo: args.historyId, ...args.targetSnapshot },
             snapshot: args.targetSnapshot,
             hlcTimestamp: globalVersion,
-            deviceTimestamp: args.deviceTimestamp || new Date()
+            deviceTimestamp: args.deviceTimestamp || new Date(),
+            revertedFromHistoryId: args.historyId // ✅ The critical link
         });
     });

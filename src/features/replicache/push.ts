@@ -1,4 +1,4 @@
-// File: src/features/replicache/push.ts
+// FILE: src/features/replicache/push.ts
 import { Effect, Schema, Exit, Cause } from "effect";
 import { sql, type Kysely } from "kysely";
 import type { Database } from "../../types";
@@ -206,7 +206,8 @@ export const handlePush = (
               }
             });
 
-            const exit = await Effect.runPromiseExit(effectToRun);
+            // ✅ FIX: Use serverRuntime instead of Effect to ensure consistent context (Service dependencies)
+            const exit = await serverRuntime.runPromiseExit(effectToRun);
 
             if (Exit.isFailure(exit)) {
                 const actualError = Cause.squash(exit.cause);

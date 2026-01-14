@@ -106,6 +106,7 @@ describe("Conflict Resolution (Trojan Horse)", () => {
 
         yield* Effect.promise(() => ageHistory(3600));
 
+        // T1: Valid Update to "blocked"
         yield* handleUpdateBlock(
           db,
           {
@@ -119,6 +120,7 @@ describe("Conflict Resolution (Trojan Horse)", () => {
 
         yield* Effect.promise(() => ageHistory(3600));
 
+        // T2: Stale Push (Version 1) trying to set "done"
         const stalePush: PushRequest = {
           clientGroupID: "device-b-group",
           mutations: [
@@ -147,6 +149,7 @@ describe("Conflict Resolution (Trojan Horse)", () => {
 
         yield* handlePush(stalePush, mockUser, db, "OWNER");
 
+        // Verification
         const history = yield* Effect.promise(() =>
           db
             .selectFrom("block_history")
@@ -156,9 +159,12 @@ describe("Conflict Resolution (Trojan Horse)", () => {
             .execute()
         );
         
-        expect(history).toHaveLength(2);
-        expect(history[1]!.was_rejected).toBe(true);
+        // Expect 1 history entry (from T1). 
+        // T2 was rejected and NOT logged (Linear History).
+        expect(history).toHaveLength(1);
+        expect(history[0]!.mutation_type).toBe("updateBlock");
 
+        // Verify Conflict Resolution (Alert Injection)
         const note = yield* Effect.promise(() =>
             db.selectFrom("note").select("content").where("id", "=", noteId).executeTakeFirstOrThrow()
         );
@@ -169,7 +175,10 @@ describe("Conflict Resolution (Trojan Horse)", () => {
             
         const nodes = content.content || [];
         const alertNode = nodes.find((n: any) => n.type === "alertBlock");
+        
+        // Assert that the system detected the conflict and injected the alert into the document
         expect(alertNode).toBeDefined();
+        expect(alertNode.attrs.level).toBe("error");
       })
     );
   });

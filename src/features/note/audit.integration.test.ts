@@ -14,7 +14,6 @@ const TEST_HLC = "1736612345000:0001:TEST";
 describe("Audit & Optimistic Locking (Integration)", () => {
   let db: Kysely<Database>;
   let cleanup: () => Promise<void>;
-  // ✅ FIX: We need access to the primary user used for schema creation
   let primaryUserId: UserId;
 
   afterAll(async () => {
@@ -30,7 +29,6 @@ describe("Audit & Optimistic Locking (Integration)", () => {
     return async () => await cleanup();
   });
 
-  // Helper to ensure users exist in the DB (for multi-user scenarios)
   const ensureUserExists = (userId: UserId) => 
     Effect.promise(async () => {
         const exists = await db.selectFrom("user").select("id").where("id", "=", userId).executeTakeFirst();
@@ -48,7 +46,6 @@ describe("Audit & Optimistic Locking (Integration)", () => {
 
   const setupNoteWithBlock = (userId: UserId) =>
     Effect.gen(function* () {
-      // ✅ FIX: Ensure the creating user exists first
       yield* ensureUserExists(userId);
 
       const noteId = randomUUID() as NoteId;
@@ -58,7 +55,6 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         db.insertInto("note").values({
             id: noteId, user_id: userId, title: "Test Note", content: { type: "doc", content: [] },
             version: 1, created_at: new Date(), updated_at: new Date(),
-            // ✅ FIXED: Missing global_version
             global_version: TEST_HLC
         }).execute()
       );
@@ -68,10 +64,14 @@ describe("Audit & Optimistic Locking (Integration)", () => {
             id: blockId, note_id: noteId, user_id: userId, type: "task", content: "",
             fields: { is_complete: false }, version: 1, file_path: "", depth: 0, order: 0,
             tags: [], links: [], transclusions: [], created_at: new Date(), updated_at: new Date(),
-            // ✅ FIXED: Missing global_version
             global_version: TEST_HLC
         }).execute()
       );
+
+      // Log initial creation history manually to simulate a real creation flow if needed by test logic,
+      // but 'handleUpdateBlock' tests append-only logic. 
+      // If we assume creation logged history, we'd insert one here.
+      // For this specific test, we check if a NEW entry is added.
 
       return { noteId, blockId };
     });
@@ -79,7 +79,6 @@ describe("Audit & Optimistic Locking (Integration)", () => {
   it("Scenario A: Successful update increments version and logs history", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // Use primary user (already in DB)
         const userId = primaryUserId;
         const { blockId } = yield* setupNoteWithBlock(userId);
 
@@ -89,7 +88,7 @@ describe("Audit & Optimistic Locking (Integration)", () => {
             version: 1,
           },
           userId,
-          "1736612346000:0001:TEST" // ✅ Uses HLC string
+          "1736612346000:0001:TEST" 
         );
 
         const block = yield* Effect.promise(() =>
@@ -99,20 +98,25 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         expect(block.version).toBe(2);
         // @ts-expect-error jsonb access
         expect(block.fields.is_complete).toBe(true);
+
+        const history = yield* Effect.promise(() =>
+            db.selectFrom("block_history").selectAll().where("block_id", "=", blockId).execute()
+        );
+        expect(history).toHaveLength(1);
       })
     );
   });
 
-  it("Scenario B: Stale write is rejected and logged", async () => {
+  it("Scenario B: Stale write is rejected and NOT logged (Linear History)", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const user1 = primaryUserId;
         const user2 = randomUUID() as UserId;
-        yield* ensureUserExists(user2); // Create secondary user
+        yield* ensureUserExists(user2); 
 
         const { blockId } = yield* setupNoteWithBlock(user1);
 
-        // 1. User 1 Updates successfully
+        // 1. User 1 Updates successfully -> Version 2
         yield* handleUpdateBlock(db, { blockId, fields: { is_complete: true }, version: 1 }, user1, "1736612347000:0001:U1");
 
         const blockV2 = yield* Effect.promise(() =>
@@ -120,24 +124,29 @@ describe("Audit & Optimistic Locking (Integration)", () => {
         );
         expect(blockV2.version).toBe(2);
 
-        // 2. User 2 Tries to Update with STALE version
+        // 2. User 2 Tries to Update with STALE version 1
         const attempt = yield* Effect.either(
             handleUpdateBlock(db, { blockId, fields: { is_complete: false }, version: 1 }, user2, "1736612348000:0001:U2")
         );
 
+        // 3. Expect Error
         expect(Either.isLeft(attempt)).toBe(true);
         if (Either.isLeft(attempt)) {
             expect(attempt.left).toBeInstanceOf(VersionConflictError);
         }
 
+        // 4. Expect NO extra history entry (Linear History Immutability)
         const history = yield* Effect.promise(() =>
-            // ✅ FIX: Sorted by hlc_timestamp instead of timestamp
-            db.selectFrom("block_history").selectAll().where("block_id", "=", blockId).orderBy("hlc_timestamp", "asc").execute()
+            db.selectFrom("block_history")
+              .selectAll()
+              .where("block_id", "=", blockId)
+              .orderBy("hlc_timestamp", "asc")
+              .execute()
         );
 
-        expect(history).toHaveLength(2);
-        expect(history[1]!.user_id).toBe(user2);
-        expect(history[1]!.was_rejected).toBe(true);
+        // Should only have the one successful entry from User 1
+        expect(history).toHaveLength(1);
+        expect(history[0]!.user_id).toBe(user1);
       })
     );
   });

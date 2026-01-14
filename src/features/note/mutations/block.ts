@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { sql, type Kysely, type Transaction } from "kysely";
 import type { Database } from "../../../types";
 import { NoteDatabaseError, VersionConflictError } from "../Errors";
-import { logBlockHistory, markHistoryRejected } from "../history.utils";
+import { logBlockHistory } from "../history.utils";
 import { updateBlockInContent, revertBlockInContent } from "../utils/content-traversal";
 import { 
     UpdateBlockArgsSchema, 
@@ -207,11 +207,20 @@ export const handleUpdateBlock = (
 
         if (!blockRow) return;
 
-        // Resolve Location Truth if location arguments are present
-        // We use a temporary variable for the resolved data
+        // --- Optimistic Locking Check ---
+        // In Linear History mode, we fail immediately on conflict.
+        // We do NOT log this attempt as history, preserving a clean ledger of accepted changes.
+        const currentVersion = blockRow?.version ?? 1;
+        if (args.version !== currentVersion) {
+            return yield* Effect.fail(new VersionConflictError({
+                blockId: args.blockId,
+                expectedVersion: currentVersion,
+                actualVersion: args.version
+            }));
+        }
+
+        // --- Resolve Location Truth ---
         let resolvedLocation = {};
-        
-        // This object maps to DB columns for the 'block' table update
         let dbLocationUpdates = {};
 
         if (args.entityId !== undefined || args.latitude !== undefined) {
@@ -222,7 +231,6 @@ export const handleUpdateBlock = (
                 locationAccuracy: args.locationAccuracy
             });
             
-            // Map to DB column names for updateTable
             dbLocationUpdates = {
                 latitude: res.latitude,
                 longitude: res.longitude,
@@ -231,7 +239,6 @@ export const handleUpdateBlock = (
                 location_accuracy: res.locationAccuracy
             };
 
-            // Map to history payload (camelCase)
             resolvedLocation = {
                 entityId: res.entityId,
                 locationSource: res.locationSource,
@@ -239,7 +246,8 @@ export const handleUpdateBlock = (
             };
         }
 
-        const historyId = yield* logBlockHistory(db, {
+        // --- Log History (Linear, Immutable) ---
+        yield* logBlockHistory(db, {
             blockId: args.blockId,
             noteId: blockRow.note_id!,
             userId: userId,
@@ -247,19 +255,10 @@ export const handleUpdateBlock = (
             args: { ...args, ...resolvedLocation },
             hlcTimestamp: globalVersion,
             deviceTimestamp: deviceTime,
-            // ✅ Pass Location Context to History
             ...resolvedLocation
         });
 
-        const currentVersion = blockRow?.version ?? 1;
-        if (args.version !== currentVersion) {
-            yield* markHistoryRejected(db, historyId);
-            return yield* Effect.fail(new VersionConflictError({
-                blockId: args.blockId,
-                expectedVersion: currentVersion,
-                actualVersion: args.version
-            }));
-        }
+        // --- Apply Updates ---
 
         // Logic for extracting 'content' from fields if present
         let contentUpdate: string | undefined;
@@ -268,7 +267,6 @@ export const handleUpdateBlock = (
         if ('content' in fieldsToSave) {
             const contentVal = fieldsToSave['content'];
             contentUpdate = typeof contentVal === 'string' ? contentVal : JSON.stringify(contentVal);
-            // Remove content from fields JSONB to avoid duplication/confusion
             delete fieldsToSave['content'];
         }
 
@@ -317,7 +315,7 @@ export const handleUpdateBlock = (
             }, globalVersion);
         }
 
-        // Update Block Table with location overrides
+        // Update Block Table
         yield* Effect.tryPromise({
             try: () => {
                 const updateQuery = db.updateTable("block")
@@ -326,7 +324,7 @@ export const handleUpdateBlock = (
                         version: sql<number>`version + 1`,
                         updated_at: sql<Date>`now()`,
                         global_version: globalVersion,
-                        ...dbLocationUpdates // ✅ Apply Location Truth
+                        ...dbLocationUpdates 
                     });
                 
                 if (contentUpdate !== undefined) {
@@ -353,6 +351,8 @@ export const handleRevertBlock = (
     globalVersion: string 
 ) =>
     Effect.gen(function* () {
+        yield* Effect.logInfo(`[handleRevertBlock] Reverting ${args.blockId} to history ${args.historyId}. New HLC: ${globalVersion}`);
+        
         const deviceTime = args.deviceTimestamp || new Date();
         const blockRow = yield* Effect.tryPromise({
             try: () => db.selectFrom("block").select(["note_id", "type"]).where("id", "=", args.blockId).executeTakeFirst(),
@@ -361,15 +361,18 @@ export const handleRevertBlock = (
 
         if (!blockRow) return;
 
+        // ✅ LINEAR HISTORY: Explicitly link this new event to the old event we are reverting from.
         yield* logBlockHistory(db, {
             blockId: args.blockId,
             noteId: blockRow.note_id!,
             userId: userId,
             mutationType: "revertBlock",
-            args: { revertedTo: args.historyId, ...args.targetSnapshot },
+            // The args for a revert is the snapshot we are applying
+            args: args.targetSnapshot,
             snapshot: args.targetSnapshot,
             hlcTimestamp: globalVersion,
-            deviceTimestamp: deviceTime
+            deviceTimestamp: deviceTime,
+            revertedFromHistoryId: args.historyId // ✅ The critical link
         });
 
         const fieldsToRestore = JSON.stringify(args.targetSnapshot["fields"] || {});

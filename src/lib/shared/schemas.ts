@@ -368,7 +368,16 @@
       
       change_delta: Schema.Unknown,
       content_snapshot: Schema.optional(Schema.Unknown),
-      was_rejected: Schema.Boolean,
+
+      // ✅ Updated: Deprecated flag
+      was_rejected: Schema.Boolean.pipe(Schema.annotations({
+          description: "DEPRECATED: Linear history model does not reject entries. Failed mutations are excluded from history."
+      })),
+
+      // ✅ Updated: Location Context
+      entity_id: Schema.optional(Schema.Union(EntityIdSchema, Schema.Null)),
+      location_source: Schema.optional(Schema.Union(Schema.String, Schema.Null)),
+      location_accuracy: Schema.optional(Schema.Union(Schema.Number, Schema.Null)),
     });
 
     export type HistoryEntry = Schema.Schema.Type<typeof HistoryEntrySchema>;
@@ -581,7 +590,6 @@
       CreateTiptapTextBlockArgs
     );
 
-    // ✅ FIXED: UpdateBlockArgsSchema now includes location context fields
     export const UpdateBlockArgsSchema = Schema.Struct({
       blockId: BlockIdSchema,
       fields: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
