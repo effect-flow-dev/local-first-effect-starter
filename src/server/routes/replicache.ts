@@ -1,4 +1,4 @@
-// File: src/server/routes/replicache.ts
+// FILE: src/server/routes/replicache.ts
 import { Elysia, t } from "elysia";
 import { Effect, Either, Schema } from "effect";
 import { TreeFormatter } from "effect/ParseResult";
@@ -15,7 +15,8 @@ import {
   PullError,
   PushError,
   UnauthorizedError,
-  ClientStateNotFoundError, 
+  ClientStateNotFoundError,
+  ClockSkewError, // ✅ Imported
 } from "../../features/replicache/Errors";
 import type { Role } from "../../lib/shared/permissions";
 
@@ -38,6 +39,21 @@ const handleReplicacheResult = <A>(
     console.warn("[Replicache] Client state not found (Time Travel). Sending reset signal.");
     set.status = 200; 
     return { error: "ClientStateNotFound" };
+  }
+
+  // ✅ 5. Update Route Handling (Error Mapping)
+  if (error instanceof ClockSkewError) {
+    console.warn(`[Replicache] Rejected Push due to Clock Skew. Client: ${error.clientTime}, Server: ${error.serverTime}`);
+    set.status = 400;
+    return { 
+        error: "ClockSkewError",
+        message: "Your device clock is significantly ahead of server time. Please check your system settings.",
+        details: {
+            serverTime: error.serverTime,
+            clientTime: error.clientTime,
+            threshold: error.threshold
+        }
+    };
   }
 
   if (error instanceof InvalidRequestError) {
@@ -104,7 +120,6 @@ export const replicacheRoutes = new Elysia({ prefix: "/api/replicache" })
     {
       body: t.Object({
         clientGroupID: t.String(),
-        // ✅ FIXED: Allow String or Number to support HLC cookies
         cookie: t.Union([t.String(), t.Number(), t.Null()]),
         filter: t.Optional(t.Any()),
       }),

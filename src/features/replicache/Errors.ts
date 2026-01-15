@@ -36,3 +36,13 @@ export class PushError extends Data.TaggedError("PushError")<{
 export class ClientStateNotFoundError extends Data.TaggedError(
   "ClientStateNotFoundError",
 ) {}
+
+/**
+ * Error for when a client's HLC timestamp is too far in the future compared to server time.
+ * This protects the causal graph from being corrupted by devices with bad clocks.
+ */
+export class ClockSkewError extends Data.TaggedError("ClockSkewError")<{
+  readonly serverTime: number;
+  readonly clientTime: number;
+  readonly threshold: number;
+}> {}

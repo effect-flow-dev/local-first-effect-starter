@@ -41,11 +41,36 @@ import {
   CreateNotebookArgsSchema,
   DeleteNotebookArgsSchema,
 } from "../notebook/notebook.mutations";
-import { PushError } from "./Errors";
+import { PushError, ClockSkewError } from "./Errors";
 import { NoteDatabaseError, VersionConflictError } from "../note/Errors";
 import { hasPermission, PERMISSIONS, type Role, type Permission } from "../../lib/shared/permissions";
 import { injectConflictAlert, type ContentNode } from "../note/utils/content-traversal"; 
 import { serverRuntime } from "../../lib/server/server-runtime";
+
+// ✅ 2. Define Tolerance Constants
+// 24 Hours in milliseconds
+export const MAX_FUTURE_DRIFT_MS = 24 * 60 * 60 * 1000;
+
+// ✅ 3. Implement Validation Logic (Pure Helper)
+const validateHlcDrift = (clientHlc: string) =>
+  Effect.gen(function* () {
+    const { physical: clientTime } = unpackHlc(clientHlc);
+    const serverTime = Date.now();
+    const drift = clientTime - serverTime;
+
+    if (drift > MAX_FUTURE_DRIFT_MS) {
+      yield* Effect.logWarning(
+        `[Push] Clock Skew Detected: Client ${clientTime} > Server ${serverTime} + ${MAX_FUTURE_DRIFT_MS}`,
+      );
+      return yield* Effect.fail(
+        new ClockSkewError({
+          serverTime,
+          clientTime,
+          threshold: MAX_FUTURE_DRIFT_MS,
+        }),
+      );
+    }
+  });
 
 const MUTATION_PERMISSIONS: Record<string, Permission> = {
     createNote: PERMISSIONS.NOTE_CREATE,
@@ -78,6 +103,18 @@ export const handlePush = (
 ) =>
   Effect.gen(function* () {
     if (req.mutations.length === 0) return;
+
+    // ✅ 4. Integrate Guard into handlePush
+    // Validate all mutations for clock skew BEFORE starting the transaction.
+    // If any mutation is from the far future, reject the entire batch.
+    yield* Effect.forEach(req.mutations, (mutation) => {
+        // Safe check for args object and hlcTimestamp property
+        const args = mutation.args as { hlcTimestamp?: string } | undefined;
+        if (args && typeof args.hlcTimestamp === "string") {
+            return validateHlcDrift(args.hlcTimestamp);
+        }
+        return Effect.void;
+    });
 
     yield* Effect.tryPromise({
       try: () =>
