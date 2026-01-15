@@ -2,6 +2,9 @@
 import type { NodeView, EditorView } from "@tiptap/pm/view";
 import type { Node as ProsemirrorNode } from "@tiptap/pm/model";
 import type { InteractiveProsemirrorNode, BlockFieldUpdateDetail } from "./InteractiveNode.types";
+import { effect } from "@preact/signals-core"; 
+import { presenceState } from "../../../lib/client/stores/presenceStore"; 
+import { authState } from "../../../lib/client/stores/authStore"; 
 
 import "../node-views/task-node-view";
 import "../node-views/image-block-node-view";
@@ -16,6 +19,8 @@ export class InteractiveBlockNodeView implements NodeView {
   private fileComponent?: HTMLElement;
 
   private node: InteractiveProsemirrorNode;
+
+  private _disposeEffect?: () => void;
 
   constructor(
     node: InteractiveProsemirrorNode,
@@ -47,6 +52,27 @@ export class InteractiveBlockNodeView implements NodeView {
     this.dom.appendChild(this.contentDOM);
 
     this.renderSpecificContent();
+
+    // Setup Presence Monitoring
+    this._disposeEffect = effect(() => {
+      const blockId = this.node.attrs.blockId;
+      if (!blockId) return;
+
+      const users = presenceState.value[blockId] || [];
+      const currentUserId = authState.value.user?.id;
+
+      const remoteUsers = users.filter(u => u.userId !== currentUserId);
+      const hasRemoteUser = remoteUsers.length > 0;
+
+      if (hasRemoteUser) {
+        this.dom.classList.add("is-remote-locked");
+        const names = remoteUsers.map(u => u.userId.slice(0, 4)).join(", ");
+        this.dom.setAttribute("title", `Locked by: ${names}`);
+      } else {
+        this.dom.classList.remove("is-remote-locked");
+        this.dom.removeAttribute("title");
+      }
+    });
   }
 
   private handleDelete = (e: Event) => {
@@ -196,7 +222,6 @@ export class InteractiveBlockNodeView implements NodeView {
       }
     }
 
-    // ✅ FIX: Ensure file_attachment update logic matches render logic
     if (this.node.attrs.blockType === "image" && this.imageComponent) {
       if (fields.url) {
         this.imageComponent.setAttribute("url", fields.url);
@@ -229,5 +254,8 @@ export class InteractiveBlockNodeView implements NodeView {
   destroy() {
     this.dom.removeEventListener("delete-block", this.handleDelete);
     this.dom.removeEventListener("update-block-field", this.handleBlockFieldUpdate as EventListener);
+    
+    // ✅ 4. Lifecycle Management: Cleanup reactive subscription
+    this._disposeEffect?.();
   }
 }

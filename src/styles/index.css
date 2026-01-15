@@ -85,3 +85,12 @@
 .interactive-block.is-active .drag-handle {
   opacity: 1;
 }
+
+/* --- Collaborative Soft Locking --- */
+.is-remote-locked {
+  pointer-events: none;
+  opacity: 0.6;
+  filter: grayscale(100%);
+  border-color: #f59e0b !important; /* amber-500 */
+  transition: all 0.3s ease-in-out;
+}
